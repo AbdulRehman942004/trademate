@@ -4,3 +4,5 @@ __pycache__/
 
 #Ignore the data directory, which may contain large datasets or sensitive information
 data
+
+*.log

@@ -1,5 +1,10 @@
 # CHANGELOG
 
+
+### v2.1.0 - 04/09/2026
+#### Added
+- Added the scrapping service for PCT via TIPP.
+
 ### v2.0.0 - 04/09/2026
 #### Added
 - data ingestion pipeline using knowlege graph (Neo4j)
