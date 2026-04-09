@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+/* Switch Tailwind's dark: variant to class-based */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ── CSS design tokens ────────────────────────────── */
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+/* Applied by ThemeProvider via .dark on <html> */
+.dark {
+  --background: #09090b;
+  --foreground: #fafafa;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* ── Base ────────────────────────────────────────── */
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Scrollbar ───────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 9999px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+}
+
+/* ── Prose tweaks ────────────────────────────────── */
+.prose-sm p {
+  margin-bottom: 0.75rem;
+}
+.prose-sm p:last-child {
+  margin-bottom: 0;
+}

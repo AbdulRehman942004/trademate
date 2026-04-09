@@ -1,5 +1,8 @@
 # CHANGELOG
 
+### v3.0.0 - 04/09/2026
+#### Added
+- Made a frontend for trademate chatbot and implemented 3 layer api architecture
 
 ### v2.1.0 - 04/09/2026
 #### Added

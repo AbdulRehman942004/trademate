@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:tipp.gov.pk)",
+      "Bash(curl -k -s \"https://tipp.gov.pk/index.php?r=tradeInfo/view&id=0101.21\")",
+      "WebSearch",
+      "Bash(curl -k -s \"https://tipp.gov.pk/index.php?r=tradeInfo/listAll\")",
+      "Bash(curl -k -s \"http://tipp.gov.pk/index.php?r=tradeInfo/listAll\")",
+      "Read(//tmp/**)",
+      "Bash(curl -k -s \"https://tipp.gov.pk/index.php?r=tradeInfo/ajaxFillTree\")",
+      "Bash(curl -k -s \"https://tipp.gov.pk/index.php?r=tradeInfo/index\")",
+      "Bash(curl -k -s \"https://tipp.gov.pk/index.php?r=tradeInfo/ajaxFillTree&pid=\")",
+      "Bash(curl -k -s \"https://tipp.gov.pk/index.php?r=tradeInfo/ajaxFillTree&pid=0\")",
+      "Bash(curl -k -s -H \"User-Agent: Mozilla/5.0\" \"https://tipp.gov.pk/index.php?r=tradeInfo/listAll\")",
+      "Bash(python3 -c \"import sys; html = sys.stdin.read\\(\\); print\\('Has content div:', '<div id=\\\\\"content\\\\\">' in html\\); print\\('Content div position:', html.find\\('<div id=\\\\\"content\\\\\">'\\)\\); print\\('Nearby text:', html[html.find\\('<div id=\\\\\"content\\\\\">'\\)-100:html.find\\('<div id=\\\\\"content\\\\\">'\\)+500]\\)\")",
+      "Bash(curl -k -s \"https://tipp.gov.pk/index.php?r=tradeInfo/ajaxFillTree\" -d \"pid=\")",
+      "Bash(curl -k -s \"https://tipp.gov.pk/index.php?r=tradeInfo/ajaxFillTree&pid=ROOT\")",
+      "Bash(curl -k -s 'https://tipp.gov.pk/index.php?r=tradeInfo/ajaxFillTree' --data-urlencode pid=__TRACKED_VAR__)",
+      "Bash(curl -k -s \"https://tipp.gov.pk/index.php?r=tradeInfo\")",
+      "Bash(curl -k -s \"https://tipp.gov.pk/index.php?r=tradeInfo/index\" -X POST -d \"CommoditySearchForm[searchType]=HSCODE&CommoditySearchForm[searchValue]=01&searchCommodity=Search\")",
+      "Bash(curl -k -s \"https://tipp.gov.pk/index.php?r=tradeInfo/view&id=1\")",
+      "Bash(curl -k -s \"https://tipp.gov.pk/index.php?r=tradeInfo/view&id=100\")",
+      "Bash(curl -k -s 'https://tipp.gov.pk/index.php?r=tradeInfo/view&id=__TRACKED_VAR__')"
+    ]
+  }
+}
