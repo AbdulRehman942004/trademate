@@ -24,7 +24,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agent.prompts import SYSTEM_PROMPT
 from agent.state import AgentState
-from agent.tools import ensure_vector_index, retrieve_trade_context
+from agent.tools import ensure_vector_index, retrieve_pinecone_context, retrieve_trade_context
 
 load_dotenv()
 
@@ -73,6 +73,22 @@ def retrieve_node(state: AgentState) -> dict:
     return {"context": context}
 
 
+def vector_search_node(state: AgentState) -> dict:
+    """
+    Embed the latest user message and query Pinecone for semantically
+    relevant document chunks (trade policies, reports, regulations).
+
+    Returns a partial state update: {"pinecone_context": <retrieved text>}.
+    Runs after retrieve_node so both knowledge sources are populated before
+    the LLM generates its response.
+    """
+    last_msg: BaseMessage = state["messages"][-1]
+    query: str = last_msg.content if isinstance(last_msg.content, str) else ""
+
+    pinecone_context = retrieve_pinecone_context(query)
+    return {"pinecone_context": pinecone_context}
+
+
 def generate_node(state: AgentState) -> dict:
     """
     Build a prompt from the system message + retrieved context + full
@@ -83,8 +99,11 @@ def generate_node(state: AgentState) -> dict:
     """
     llm = _get_llm()
     context = state.get("context") or "No relevant trade data was found in the knowledge base."
+    pinecone_context = state.get("pinecone_context") or "No relevant documents were found."
 
-    system_msg = SystemMessage(content=SYSTEM_PROMPT.format(context=context))
+    system_msg = SystemMessage(
+        content=SYSTEM_PROMPT.format(context=context, pinecone_context=pinecone_context)
+    )
     prompt_messages = [system_msg] + list(state["messages"])
 
     response = llm.invoke(prompt_messages)
@@ -98,10 +117,12 @@ def _build_graph():
     builder = StateGraph(AgentState)
 
     builder.add_node("retrieve", retrieve_node)
+    builder.add_node("vector_search", vector_search_node)
     builder.add_node("generate", generate_node)
 
     builder.add_edge(START, "retrieve")
-    builder.add_edge("retrieve", "generate")
+    builder.add_edge("retrieve", "vector_search")
+    builder.add_edge("vector_search", "generate")
     builder.add_edge("generate", END)
 
     return builder.compile()

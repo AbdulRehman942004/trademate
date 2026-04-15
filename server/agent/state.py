@@ -9,12 +9,17 @@ class AgentState(TypedDict):
     """
     State flowing through the TradeMate LangGraph agent.
 
-    messages  — full conversation turn list (user + assistant).
-                The add_messages reducer appends new messages rather
-                than replacing the list on every node update.
-    context   — raw text retrieved from the Neo4j knowledge graph for
-                the current user turn.  Overwritten on every retrieve call.
+    messages         — full conversation turn list (user + assistant).
+                       The add_messages reducer appends new messages rather
+                       than replacing the list on every node update.
+    context          — structured trade data retrieved from the Neo4j
+                       knowledge graph (HS codes, tariffs, procedures…).
+                       Overwritten on every retrieve call.
+    pinecone_context — semantic search results retrieved from Pinecone
+                       (ingested trade documents, policies, reports…).
+                       Overwritten on every vector_search call.
     """
 
     messages: Annotated[List[BaseMessage], add_messages]
     context: str
+    pinecone_context: str

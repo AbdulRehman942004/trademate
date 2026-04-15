@@ -90,7 +90,7 @@ async def _stream_agent(
 
         messages.append(HumanMessage(content=message))
 
-        initial_state = {"messages": messages, "context": ""}
+        initial_state = {"messages": messages, "context": "", "pinecone_context": ""}
 
         async for chunk, metadata in graph.astream(
             initial_state,

@@ -1,6 +1,11 @@
 # CHANGELOG
 
 
+### v5.1.0 4/15/2026
+#### Added
+
+- User Query to Vector db 
+
 ### v5.0.0 4/15/2026
 #### Added 
 - Data Pipeline (Extraction,Embedding and Ingestion)
