@@ -27,7 +27,7 @@ export default function Page() {
         <div className="mx-auto max-w-3xl px-6 py-4">
           <p className="text-xs text-zinc-400">
             Documents are ingested via S3 → parsed → chunked → embedded with{" "}
-            <code className="font-mono">text-embedding-3-large</code> → upserted
+            <code className="font-mono">text-embedding-3-small</code> → upserted
             to Pinecone.
           </p>
         </div>

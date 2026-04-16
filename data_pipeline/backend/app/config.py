@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     # OpenAI
     openai_api_key: str
-    embedding_model: str = "text-embedding-3-large"
+    embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 3072
 
     # Pipeline tuning — semantic chunking

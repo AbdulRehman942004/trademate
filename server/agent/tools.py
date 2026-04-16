@@ -230,7 +230,7 @@ def _format_record(record: dict) -> str:
 
 _pinecone_index = None
 _PINECONE_INDEX_NAME = "trademate-documents"
-_PINECONE_EMBEDDING_DIMS = 3072  # text-embedding-3-large
+_PINECONE_EMBEDDING_DIMS = 1536  # text-embedding-3-small
 
 
 def _get_pinecone_index():
@@ -251,7 +251,7 @@ def _get_pinecone_index():
 
 def _get_pinecone_embeddings():
     """
-    Pinecone uses text-embedding-3-large (3072 dims).
+    Pinecone uses text-embedding-3-small (1536 dims).
     We keep a separate singleton so it doesn't conflict with the
     Neo4j embeddings model (text-embedding-3-small, 1536 dims).
     """
@@ -262,14 +262,14 @@ def _get_pinecone_embeddings():
         raise EnvironmentError("OPENAI_API_KEY must be set in .env")
 
     return OpenAIEmbeddings(
-        model="text-embedding-3-large",
+        model="text-embedding-3-small",
         openai_api_key=api_key,
     )
 
 
 def retrieve_pinecone_context(query: str, top_k: int = 5) -> str:
     """
-    Embed *query* with text-embedding-3-large, query Pinecone, and return
+    Embed *query* with text-embedding-3-small, query Pinecone, and return
     a formatted string of the top-k matching document chunks.
     Returns an empty string on any error so the graph degrades gracefully.
     """
