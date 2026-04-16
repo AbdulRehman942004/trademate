@@ -67,6 +67,8 @@ export function SidebarItem({
             onClick={(e) => e.stopPropagation()}
             className="flex-1 bg-transparent outline-none border-b border-zinc-400 dark:border-zinc-500 text-sm min-w-0"
           />
+        ) : conversation.titleLoading ? (
+          <span className="flex-1 h-3.5 rounded bg-zinc-300 dark:bg-zinc-600 animate-pulse" />
         ) : (
           <span className="flex-1 truncate">
             {truncateTitle(conversation.title)}

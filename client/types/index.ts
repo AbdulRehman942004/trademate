@@ -10,6 +10,7 @@ export interface Message {
 export interface Conversation {
   id: string;
   title: string;
+  titleLoading?: boolean;
   messages: Message[];
   createdAt: Date;
   updatedAt: Date;

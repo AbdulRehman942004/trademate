@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import AuthService from "@/services/auth.service";
 import { useAuthStore } from "@/stores/authStore";
+import { useChatStore } from "@/stores/chatStore";
 import { decodeJwt } from "@/lib/jwt";
 import type {
   LoginRequest,
@@ -22,9 +23,7 @@ export function useRegister() {
     setIsLoading(true);
     try {
       await AuthService.register(body);
-      // After registration the user needs to log in to get a token,
-      // then complete onboarding. Redirect to login.
-      router.push("/login?registered=1");
+      router.push(`/verify-otp?email=${encodeURIComponent(body.email)}&mode=registration`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed.");
     } finally {
@@ -100,10 +99,103 @@ export function useOnboarding() {
 // ── useLogout ───────────────────────────────────────────────────────────────
 export function useLogout() {
   const { logout } = useAuthStore();
+  const { clearAll } = useChatStore();
   const router = useRouter();
 
   return () => {
     logout();
+    clearAll();
     router.push("/login");
   };
+}
+
+// ── useVerifyRegistration ───────────────────────────────────────────────────
+export function useVerifyRegistration() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError]         = useState<string | null>(null);
+  const router = useRouter();
+
+  const verifyRegistration = async (email: string, otp: string) => {
+    setError(null);
+    setIsLoading(true);
+    try {
+      await AuthService.verifyRegistration({ email, otp });
+      router.push("/login?registered=1");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Verification failed.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { verifyRegistration, isLoading, error };
+}
+
+// ── useForgotPassword ───────────────────────────────────────────────────────
+export function useForgotPassword() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError]         = useState<string | null>(null);
+  const [success, setSuccess]     = useState(false);
+  const router = useRouter();
+
+  const requestOtp = async (email: string) => {
+    setError(null);
+    setIsLoading(true);
+    try {
+      await AuthService.forgotPassword({ email });
+      setSuccess(true);
+      // Pass email via query param so verify-otp page can pre-fill it
+      router.push(`/verify-otp?email=${encodeURIComponent(email)}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send reset code.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { requestOtp, isLoading, error, success };
+}
+
+// ── useVerifyOtp ────────────────────────────────────────────────────────────
+export function useVerifyOtp() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError]         = useState<string | null>(null);
+  const router = useRouter();
+
+  const verifyOtp = async (email: string, otp: string) => {
+    setError(null);
+    setIsLoading(true);
+    try {
+      const { reset_token } = await AuthService.verifyOtp({ email, otp });
+      router.push(`/reset-password?token=${encodeURIComponent(reset_token)}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "OTP verification failed.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { verifyOtp, isLoading, error };
+}
+
+// ── useResetPassword ────────────────────────────────────────────────────────
+export function useResetPassword() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError]         = useState<string | null>(null);
+  const router = useRouter();
+
+  const resetPassword = async (resetToken: string, newPassword: string) => {
+    setError(null);
+    setIsLoading(true);
+    try {
+      await AuthService.resetPassword({ reset_token: resetToken, new_password: newPassword });
+      router.push("/login?reset=1");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Password reset failed.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { resetPassword, isLoading, error };
 }

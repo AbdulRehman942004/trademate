@@ -12,7 +12,8 @@ const BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL ?? "http://localhost:8000";
 export type SSETokenEvent = { type: "token"; content: string; conversation_id: string };
 export type SSEDoneEvent  = { type: "done";  conversation_id: string };
 export type SSEErrorEvent = { type: "error"; detail: string; conversation_id: string };
-export type SSEEvent = SSETokenEvent | SSEDoneEvent | SSEErrorEvent;
+export type SSETitleEvent = { type: "title"; title: string; conversation_id: string };
+export type SSEEvent = SSETokenEvent | SSEDoneEvent | SSEErrorEvent | SSETitleEvent;
 
 /**
  * Stream a chat response from the backend.
@@ -28,6 +29,7 @@ export async function streamChat(
   conversationId: string,
   history: Message[],
   onChunk: (accumulated: string) => void,
+  onTitle?: (title: string) => void,
   signal?: AbortSignal
 ): Promise<void> {
   const token = typeof window !== "undefined"
@@ -92,6 +94,8 @@ export async function streamChat(
       if (event.type === "token") {
         accumulated += event.content;
         onChunk(accumulated);
+      } else if (event.type === "title") {
+        onTitle?.(event.title);
       } else if (event.type === "error") {
         throw new Error(event.detail);
       }

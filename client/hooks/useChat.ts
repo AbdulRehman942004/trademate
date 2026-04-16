@@ -14,6 +14,7 @@ export function useChat() {
     addMessage,
     updateLastAssistantMessage,
     setStreaming,
+    setConversationTitle,
     isStreaming,
   } = useChatStore();
 
@@ -37,6 +38,7 @@ export function useChat() {
           conversationId,
           history,
           (accumulated) => updateLastAssistantMessage(conversationId, accumulated),
+          (title) => setConversationTitle(conversationId, title),
         );
       } catch (err) {
         const detail = err instanceof Error ? err.message : "Something went wrong.";
@@ -45,7 +47,7 @@ export function useChat() {
         setStreaming(false);
       }
     },
-    [conversations, addMessage, updateLastAssistantMessage, setStreaming, isStreaming]
+    [conversations, addMessage, updateLastAssistantMessage, setStreaming, setConversationTitle, isStreaming]
   );
 
   return { sendMessage, isStreaming };

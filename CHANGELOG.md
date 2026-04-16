@@ -1,6 +1,24 @@
 # CHANGELOG
 
 
+### v5.2.0 - 04/17/2026
+#### Added
+- Router node that classifies each query and selects only the relevant tools (Pakistan HS, US HS, Pinecone) before passing to the agent — reduces token usage and improves reliability
+- Conversation persistence: all chat messages stored in PostgreSQL (`conversations` + `messages` tables) with per-user isolation
+- LLM-generated conversation titles via `gpt-4o-mini` after the first exchange; sidebar shows a skeleton loader until the title arrives
+- OTP email verification on registration: new accounts are created with `is_verified=False`, a 6-digit code is sent via AWS SES, and the account is activated only after the code is confirmed
+- Forgot-password flow: OTP request → verify OTP → reset password, all backed by short-lived JWT reset tokens (15 min)
+- `verify-otp` page handles both registration verification (`mode=registration`) and password-reset (`mode=reset`) from a single UI
+- Dedicated email templates: registration emails say "Verify your email", password-reset emails say "Password Reset" — no more shared copy
+
+#### Fix
+- Conversations were shared across users because the chat store persisted to `localStorage` without clearing on logout — fixed by calling `clearAll()` on the chat store during logout
+- Backend now returns 403 if a user tries to access another user's conversation
+- `/verify-otp`, `/forgot-password`, and `/reset-password` routes were blocked by the proxy middleware (not in `PUBLIC_PATHS`) — all three are now whitelisted
+- `otp_codes.used` column was created as `varchar` instead of `boolean` — migrated with `ALTER COLUMN … TYPE BOOLEAN`
+- `users.is_verified` column was missing from the database — added via `ALTER TABLE`
+
+
 ### v5.0.3 4/16/2026
 #### Update
 

@@ -1,18 +1,45 @@
+import logging
+import random
+import string
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlmodel import Session, select
 
 from database.database import get_session
+from models.otp import OtpCode
 from models.user import User
 from schemas.user import (
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
     LoginRequest,
     LoginResponse,
     OnboardingRequest,
     OnboardingResponse,
     RegisterRequest,
     RegisterResponse,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
+    VerifyOtpRequest,
+    VerifyOtpResponse,
 )
-from security.security import create_access_token, decode_access_token, hash_password, verify_password
+from security.security import (
+    create_access_token,
+    create_reset_token,
+    decode_access_token,
+    decode_reset_token,
+    hash_password,
+    verify_password,
+)
+from services.email import send_otp_email
+
+logger = logging.getLogger(__name__)
+
+# ── Constants ──────────────────────────────────────────────────────────────────
+_OTP_EXPIRES_MINUTES = 10
+_OTP_MAX_ATTEMPTS    = 3
+_OTP_RATE_LIMIT_SECONDS = 60   # minimum gap between OTP requests per email
 
 router = APIRouter(prefix="/v1", tags=["auth"])
 _bearer = HTTPBearer()
@@ -28,31 +55,62 @@ def _get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(_be
 
 @router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
 def register(body: RegisterRequest, session: Session = Depends(get_session)):
-    existing = session.exec(select(User).where(User.email_address == body.email)).first()
-    if existing:
+    email = body.email.lower().strip()
+
+    existing = session.exec(select(User).where(User.email_address == email)).first()
+    if existing and existing.is_verified:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
+    # If an unverified account exists for this email, remove it and re-register
+    if existing and not existing.is_verified:
+        session.delete(existing)
+        session.commit()
+
     user = User(
-        email_address=body.email,
+        email_address=email,
         user_name=body.username,
         phone_number=body.phone_number,
         password_hash=hash_password(body.password),
         status="active",
         is_onboarded=False,
+        is_verified=False,
     )
     session.add(user)
     session.commit()
     session.refresh(user)
 
-    return RegisterResponse(id=user.id, message="Registration successful")
+    # Issue OTP for email verification
+    _invalidate_existing_otps(session, email)
+    code       = _generate_otp()
+    expires_at = datetime.utcnow() + timedelta(minutes=_OTP_EXPIRES_MINUTES)
+    session.add(OtpCode(email=email, code=code, expires_at=expires_at))
+    session.commit()
+
+    try:
+        send_otp_email(to=email, otp=code, expires_minutes=_OTP_EXPIRES_MINUTES, purpose="registration")
+    except Exception as exc:
+        logger.error("[OTP] SES delivery failed for %s: %s", email, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Account created but failed to send verification email. Please use 'Forgot Password' to resend.",
+        )
+
+    logger.info("[REGISTER] User %s registered — verification OTP sent.", email)
+    return RegisterResponse(id=user.id, message="Registration successful. Please verify your email.")
 
 
 @router.post("/login", response_model=LoginResponse)
 def login(body: LoginRequest, session: Session = Depends(get_session)):
-    user = session.exec(select(User).where(User.email_address == body.email)).first()
+    user = session.exec(select(User).where(User.email_address == body.email.lower().strip())).first()
 
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
+
+    if not user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email not verified. Please check your inbox for the verification code.",
+        )
 
     if user.status == "suspended":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account suspended")
@@ -91,3 +149,272 @@ def onboarding(
     session.commit()
 
     return OnboardingResponse(message="Onboarding complete", is_onboarded=True)
+
+
+@router.post(
+    "/auth/verify-registration",
+    response_model=RegisterResponse,
+    summary="Verify email OTP to activate a newly registered account",
+)
+def verify_registration(
+    body: VerifyOtpRequest,
+    session: Session = Depends(get_session),
+):
+    """
+    Verify the OTP sent during registration.
+    On success the account is marked is_verified=True and the user can log in.
+    """
+    email = body.email.lower().strip()
+    now   = datetime.utcnow()
+
+    otp_row = session.exec(
+        select(OtpCode).where(
+            OtpCode.email      == email,
+            OtpCode.used       == False,  # noqa: E712
+            OtpCode.expires_at >  now,
+        ).order_by(OtpCode.created_at.desc())
+    ).first()
+
+    _invalid_exc = HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Invalid or expired verification code.",
+    )
+
+    if not otp_row:
+        raise _invalid_exc
+
+    if otp_row.attempts >= _OTP_MAX_ATTEMPTS:
+        otp_row.used = True
+        session.add(otp_row)
+        session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Too many incorrect attempts. Please register again.",
+        )
+
+    if otp_row.code != body.otp:
+        otp_row.attempts += 1
+        remaining = _OTP_MAX_ATTEMPTS - otp_row.attempts
+        if remaining <= 0:
+            otp_row.used = True
+        session.add(otp_row)
+        session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Incorrect code. {max(remaining, 0)} attempt(s) remaining.",
+        )
+
+    # OTP correct — activate account
+    otp_row.used = True
+    session.add(otp_row)
+
+    user = session.exec(select(User).where(User.email_address == email)).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    user.is_verified = True
+    session.add(user)
+    session.commit()
+
+    logger.info("[REGISTER] Email verified for %s — account activated.", email)
+    return RegisterResponse(id=user.id, message="Email verified. You can now sign in.")
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _generate_otp() -> str:
+    """Return a cryptographically random 6-digit numeric OTP."""
+    return "".join(random.choices(string.digits, k=6))
+
+
+def _invalidate_existing_otps(session: Session, email: str) -> None:
+    """Mark all active OTPs for an email as used before issuing a new one."""
+    active = session.exec(
+        select(OtpCode).where(
+            OtpCode.email == email,
+            OtpCode.used == False,  # noqa: E712
+        )
+    ).all()
+    for otp in active:
+        otp.used = True
+        session.add(otp)
+
+
+# ── Forgot password ────────────────────────────────────────────────────────────
+
+@router.post(
+    "/auth/forgot-password",
+    response_model=ForgotPasswordResponse,
+    summary="Request a password-reset OTP",
+)
+def forgot_password(
+    body: ForgotPasswordRequest,
+    session: Session = Depends(get_session),
+):
+    """
+    Send a 6-digit OTP to the registered email address.
+
+    - Always returns 200 regardless of whether the email exists (prevents
+      user enumeration attacks).
+    - Rate-limited: one OTP per email per 60 seconds.
+    - Invalidates any prior active OTPs for the same email.
+    """
+    email = body.email.lower().strip()
+
+    # Rate-limit check — look for a recent OTP for this email
+    rate_cutoff = datetime.utcnow() - timedelta(seconds=_OTP_RATE_LIMIT_SECONDS)
+    recent = session.exec(
+        select(OtpCode).where(
+            OtpCode.email == email,
+            OtpCode.created_at >= rate_cutoff,
+        )
+    ).first()
+
+    if recent:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Please wait {_OTP_RATE_LIMIT_SECONDS} seconds before requesting another code.",
+        )
+
+    # Silently succeed if the email is not registered (anti-enumeration)
+    user = session.exec(select(User).where(User.email_address == email)).first()
+    if not user:
+        logger.info("[OTP] Forgot-password request for unknown email %s — silently ignored.", email)
+        return ForgotPasswordResponse(
+            message="If that email is registered, you will receive a reset code shortly."
+        )
+
+    # Invalidate any prior active OTPs
+    _invalidate_existing_otps(session, email)
+
+    # Issue new OTP
+    code       = _generate_otp()
+    expires_at = datetime.utcnow() + timedelta(minutes=_OTP_EXPIRES_MINUTES)
+    otp_row    = OtpCode(email=email, code=code, expires_at=expires_at)
+    session.add(otp_row)
+    session.commit()
+
+    # Deliver via SES
+    try:
+        send_otp_email(to=email, otp=code, expires_minutes=_OTP_EXPIRES_MINUTES)
+    except Exception as exc:
+        logger.error("[OTP] SES delivery failed for %s: %s", email, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to send reset email. Please try again later.",
+        )
+
+    logger.info("[OTP] OTP issued for %s (expires %s)", email, expires_at.isoformat())
+    return ForgotPasswordResponse(
+        message="If that email is registered, you will receive a reset code shortly."
+    )
+
+
+# ── Verify OTP ─────────────────────────────────────────────────────────────────
+
+@router.post(
+    "/auth/verify-otp",
+    response_model=VerifyOtpResponse,
+    summary="Verify OTP and receive a password-reset token",
+)
+def verify_otp(
+    body: VerifyOtpRequest,
+    session: Session = Depends(get_session),
+):
+    """
+    Validate the OTP entered by the user.
+
+    On success returns a short-lived reset_token (15 min JWT) that must be
+    passed to POST /v1/auth/reset-password.
+
+    On failure the attempt counter is incremented; after 3 wrong guesses
+    the OTP is invalidated and the user must request a new one.
+    """
+    email = body.email.lower().strip()
+    now   = datetime.utcnow()
+
+    otp_row = session.exec(
+        select(OtpCode).where(
+            OtpCode.email    == email,
+            OtpCode.used     == False,  # noqa: E712
+            OtpCode.expires_at > now,
+        ).order_by(OtpCode.created_at.desc())
+    ).first()
+
+    # Generic error — do not reveal whether email exists or OTP expired
+    _invalid_exc = HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Invalid or expired OTP.",
+    )
+
+    if not otp_row:
+        raise _invalid_exc
+
+    if otp_row.attempts >= _OTP_MAX_ATTEMPTS:
+        otp_row.used = True
+        session.add(otp_row)
+        session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Too many incorrect attempts. Please request a new code.",
+        )
+
+    if otp_row.code != body.otp:
+        otp_row.attempts += 1
+        remaining = _OTP_MAX_ATTEMPTS - otp_row.attempts
+        if remaining <= 0:
+            otp_row.used = True
+        session.add(otp_row)
+        session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Incorrect OTP. {max(remaining, 0)} attempt(s) remaining.",
+        )
+
+    # OTP is correct — mark as used and issue reset token
+    otp_row.used = True
+    session.add(otp_row)
+    session.commit()
+
+    reset_token = create_reset_token(email)
+    logger.info("[OTP] OTP verified for %s — reset token issued.", email)
+
+    return VerifyOtpResponse(
+        reset_token=reset_token,
+        message="OTP verified. Use the reset_token to set a new password.",
+    )
+
+
+# ── Reset password ─────────────────────────────────────────────────────────────
+
+@router.post(
+    "/auth/reset-password",
+    response_model=ResetPasswordResponse,
+    summary="Set a new password using a valid reset token",
+)
+def reset_password(
+    body: ResetPasswordRequest,
+    session: Session = Depends(get_session),
+):
+    """
+    Set a new password.
+
+    Requires the reset_token returned by POST /v1/auth/verify-otp.
+    The token is a 15-minute JWT — once it expires the user must restart
+    the forgot-password flow.
+    """
+    email = decode_reset_token(body.reset_token)   # raises HTTP 400 on invalid/expired
+
+    user = session.exec(select(User).where(User.email_address == email)).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    user.password_hash = hash_password(body.new_password)
+    session.add(user)
+    session.commit()
+
+    logger.info("[AUTH] Password reset successfully for %s", email)
+    return ResetPasswordResponse(message="Password updated successfully. You can now log in.")

@@ -12,7 +12,8 @@ import { cn } from "@/lib/cn";
 // ── Inner component uses useSearchParams — must be inside <Suspense> ─────────
 function LoginForm() {
   const searchParams = useSearchParams();
-  const justRegistered = searchParams.get("registered") === "1";
+  const justRegistered  = searchParams.get("registered") === "1";
+  const justReset       = searchParams.get("reset") === "1";
 
   const { login, isLoading, error } = useLogin();
   const [email, setEmail] = useState("");
@@ -47,11 +48,10 @@ function LoginForm() {
         </div>
 
         {justRegistered && (
-          <AlertMessage
-            type="success"
-            message="Account created! Please sign in."
-            className="mb-4"
-          />
+          <AlertMessage type="success" message="Account created! Please sign in." className="mb-4" />
+        )}
+        {justReset && (
+          <AlertMessage type="success" message="Password updated! Please sign in with your new password." className="mb-4" />
         )}
         {error && <AlertMessage type="error" message={error} className="mb-4" />}
 
@@ -65,15 +65,25 @@ function LoginForm() {
             onChange={(e) => setEmail(e.target.value)}
             error={fieldErrors.email}
           />
-          <InputField
-            label="Password"
-            type="password"
-            placeholder="••••••••"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            error={fieldErrors.password}
-          />
+          <div>
+            <InputField
+              label="Password"
+              type="password"
+              placeholder="••••••••"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              error={fieldErrors.password}
+            />
+            <div className="mt-1.5 text-right">
+              <Link
+                href="/forgot-password"
+                className="text-xs text-violet-600 dark:text-violet-400 hover:underline"
+              >
+                Forgot password?
+              </Link>
+            </div>
+          </div>
 
           <button
             type="submit"

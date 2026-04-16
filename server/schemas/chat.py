@@ -1,13 +1,6 @@
-from typing import List, Optional
+from typing import Optional
 
-from pydantic import BaseModel, Field
-
-
-class ChatHistoryMessage(BaseModel):
-    """A single turn in the conversation history sent from the frontend."""
-
-    role: str = Field(..., pattern="^(user|assistant)$")
-    content: str
+from pydantic import BaseModel
 
 
 class ChatRequest(BaseModel):
@@ -17,10 +10,11 @@ class ChatRequest(BaseModel):
     message         — the user's latest message.
     conversation_id — opaque ID managed by the frontend; echoed back in every
                       SSE event so the client can route chunks correctly.
-    history         — prior turns in this conversation (oldest first).
-                      Sending history enables multi-turn context awareness.
+                      If omitted, a new conversation is created server-side.
+
+    History is no longer sent by the client — the server loads the last
+    20 turns from the DB automatically.
     """
 
     message: str
     conversation_id: Optional[str] = None
-    history: Optional[List[ChatHistoryMessage]] = []

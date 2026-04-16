@@ -9,6 +9,10 @@ engine = create_engine(DATABASE_URL)
 
 
 def create_db_tables():
+    # Import all models here so SQLModel picks them up before create_all
+    import models.user  # noqa: F401
+    import models.conversation  # noqa: F401
+    import models.otp  # noqa: F401
     SQLModel.metadata.create_all(engine)
 
 

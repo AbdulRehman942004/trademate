@@ -21,6 +21,8 @@ interface ChatState {
   setSelectedModel: (modelId: string) => void;
   getActiveConversation: () => Conversation | undefined;
   renameConversation: (id: string, title: string) => void;
+  setConversationTitle: (id: string, title: string) => void;
+  clearAll: () => void;
 }
 
 export const useChatStore = create<ChatState>()(
@@ -37,6 +39,7 @@ export const useChatStore = create<ChatState>()(
         const conversation: Conversation = {
           id,
           title: "New conversation",
+          titleLoading: false,
           messages: [],
           createdAt: now,
           updatedAt: now,
@@ -81,9 +84,8 @@ export const useChatStore = create<ChatState>()(
 
             return {
               ...conv,
-              title: isFirstUserMessage
-                ? deriveTitleFromMessage(message.content)
-                : conv.title,
+              // Mark title as loading on first message — server will send the real title
+              titleLoading: isFirstUserMessage ? true : conv.titleLoading,
               messages: [...conv.messages, newMessage],
               updatedAt: new Date(),
             };
@@ -122,6 +124,18 @@ export const useChatStore = create<ChatState>()(
             c.id === id ? { ...c, title } : c
           ),
         }));
+      },
+
+      setConversationTitle: (id, title) => {
+        set((state) => ({
+          conversations: state.conversations.map((c) =>
+            c.id === id ? { ...c, title, titleLoading: false } : c
+          ),
+        }));
+      },
+
+      clearAll: () => {
+        set({ conversations: [], activeConversationId: null, isStreaming: false });
       },
     }),
     {

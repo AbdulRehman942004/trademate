@@ -47,6 +47,7 @@ class User(SQLModel, table=True):
     target_region: Optional[str] = Field(default=None, max_length=100)
     language_preference: Optional[str] = Field(default=None, max_length=50)
     is_onboarded: bool = Field(default=False)
+    is_verified: bool = Field(default=False)
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime, default=datetime.utcnow),
