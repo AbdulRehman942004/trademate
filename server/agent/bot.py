@@ -691,6 +691,42 @@ Rules you MUST follow
 • If all tools return no data, say so clearly and suggest a more specific query.
 • Label every rate you quote with its source country and duty type.
 • Use bullet points or tables when listing multiple rates — clarity matters.
+
+Response style — STRICTLY ENFORCED
+────────────────────────────────────
+The tool results contain many fields (HS code, tariffs, cess, exemptions,
+procedures, etc.). You MUST only include in your response the fields that
+directly answer the user's question. Discard everything else.
+
+Field selection rules:
+  • User asks for HS code / classification
+      → Output: HS code + description only.
+      → OMIT: tariffs, cess, exemptions, procedures, summary.
+
+  • User asks for tariff / duty / rate
+      → Output: duty rates only.
+      → OMIT: cess, exemptions, procedures, summary.
+
+  • User asks for cess
+      → Output: cess rates by province only.
+      → OMIT: tariffs, exemptions, procedures, summary.
+
+  • User asks for exemptions / concessions
+      → Output: exemptions only.
+      → OMIT: tariffs, cess, procedures, summary.
+
+  • User asks for procedures
+      → Output: procedures only.
+      → OMIT: tariffs, cess, exemptions, summary.
+
+  • User asks for "full details" / "everything" / "complete breakdown"
+      → Output: all fields.
+
+Additional rules:
+  • NEVER add a Summary section.
+  • NEVER add "If you need further details, feel free to ask!" or similar.
+  • NEVER repeat information already stated.
+  • Be concise. Short answers are better than long ones.
 """)
 
 # ── LLM singleton ─────────────────────────────────────────────────────────────
@@ -714,38 +750,161 @@ def _get_llm() -> ChatOpenAI:
 
 _llm: Optional[ChatOpenAI] = None
 
-# ── ReAct agent ───────────────────────────────────────────────────────────────
+# ── Tool registry ─────────────────────────────────────────────────────────────
+# Add new tools here — the router will automatically learn to select them.
 
-_TOOLS = [search_pakistan_hs_data, search_us_hs_data, search_trade_documents]
+_ALL_TOOLS = [search_pakistan_hs_data, search_us_hs_data, search_trade_documents]
+_TOOL_MAP  = {t.name: t for t in _ALL_TOOLS}
+
+# ── Router ────────────────────────────────────────────────────────────────────
+
+_ROUTER_PROMPT = """\
+You are a query router for TradeMate, a trade intelligence assistant.
+Your ONLY job is to decide which tools are needed to answer the user's query.
+
+Available tools:
+  - search_pakistan_hs_data   → Pakistan PCT: HS codes, tariffs, cess, exemptions, procedures
+  - search_us_hs_data         → US HTS: HS codes, duty rates, trade classifications
+  - search_trade_documents    → Policy documents, trade agreements, SROs, regulations
+
+Rules:
+  • Return ONLY a JSON array of tool names needed. Nothing else.
+  • If the query mentions Pakistan or no country: include search_pakistan_hs_data.
+  • If the query mentions US/America/United States: include search_us_hs_data.
+  • If the query asks about a product with no country: include BOTH Neo4j tools.
+  • If the query is about policy, regulations, agreements, or general trade context: include search_trade_documents.
+  • For comparisons between countries: include all relevant country tools.
+  • Always include search_trade_documents for general "what is X" questions.
+  • Minimum 1 tool, maximum 3 tools.
+
+Examples:
+  "what is the hs code for smartphones in pakistan"
+      → ["search_pakistan_hs_data"]
+
+  "US tariff on cotton"
+      → ["search_us_hs_data"]
+
+  "compare pakistan and us duties on steel"
+      → ["search_pakistan_hs_data", "search_us_hs_data"]
+
+  "what is an SRO exemption"
+      → ["search_trade_documents"]
+
+  "what are automotive products"
+      → ["search_pakistan_hs_data", "search_us_hs_data", "search_trade_documents"]
+
+Respond with ONLY the JSON array. No explanation, no markdown.
+"""
 
 
-def _build_bot():
+def _get_router_llm() -> ChatOpenAI:
+    """Lightweight LLM for routing — no tools bound, low temperature."""
+    global _router_llm  # noqa: PLW0603
+    if _router_llm is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise EnvironmentError("OPENAI_API_KEY must be set in .env")
+        _router_llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            openai_api_key=api_key,
+            temperature=0.0,   # deterministic routing
+            streaming=False,   # no streaming needed for routing
+        )
+        logger.info("Router LLM initialised (gpt-4o-mini, streaming=False)")
+    return _router_llm
+
+
+_router_llm: Optional[ChatOpenAI] = None
+
+
+def _route_query(query: str) -> list:
     """
-    Compile the LangGraph ReAct agent.
-
-    create_react_agent produces this graph:
-        __start__
-            │
-            ▼
-        agent_node  ─── no tool calls ──► __end__
-            ▲                │
-            │           tool_call?
-            │                │
-            └──── tool_node ◄┘
-
-    The agent_node calls the LLM with the bound tools.
-    If the LLM emits a tool call, tool_node executes it and appends the
-    ToolMessage to state["messages"], then loops back to agent_node.
-    When the LLM produces a plain AIMessage (no tool calls), the loop exits.
+    Call the router LLM with the query and return the list of tool objects
+    to bind for this request. Falls back to all tools on any error.
     """
-    llm   = _get_llm()
-    graph = create_react_agent(
-        model=llm.bind_tools(_TOOLS),
-        tools=_TOOLS,
-        prompt=_BOT_SYSTEM_PROMPT,
-    )
-    logger.info("ReAct bot graph compiled (tools: %s).", [t.name for t in _TOOLS])
-    return graph
+    import json
+
+    try:
+        router_llm = _get_router_llm()
+        response   = router_llm.invoke([
+            SystemMessage(content=_ROUTER_PROMPT),
+            {"role": "user", "content": query},
+        ])
+        raw = response.content.strip()
+
+        # Strip markdown code fences if present
+        if raw.startswith("```"):
+            raw = "\n".join(
+                line for line in raw.splitlines()
+                if not line.startswith("```")
+            ).strip()
+
+        selected_names: list[str] = json.loads(raw)
+
+        # Validate — keep only names that exist in the registry
+        valid   = [n for n in selected_names if n in _TOOL_MAP]
+        invalid = [n for n in selected_names if n not in _TOOL_MAP]
+
+        if invalid:
+            logger.warning("━━━ [ROUTER] Unknown tool name(s) ignored: %s", invalid)
+
+        if not valid:
+            logger.warning("━━━ [ROUTER] No valid tools selected — falling back to all tools.")
+            return _ALL_TOOLS
+
+        selected_tools = [_TOOL_MAP[n] for n in valid]
+
+        logger.info(
+            "━━━ [ROUTER] Query: %r", query[:120]
+        )
+        logger.info(
+            "━━━ [ROUTER] Selected %d/%d tool(s): %s",
+            len(selected_tools),
+            len(_ALL_TOOLS),
+            [t.name for t in selected_tools],
+        )
+        skipped = [n for n in _TOOL_MAP if n not in valid]
+        if skipped:
+            logger.info("━━━ [ROUTER] Skipped (not needed): %s", skipped)
+
+        return selected_tools
+
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "━━━ [ROUTER] Routing failed (%s) — falling back to all tools.", exc
+        )
+        return _ALL_TOOLS
+
+
+# ── Agent builder with cache ──────────────────────────────────────────────────
+
+_agent_cache: dict[frozenset, object] = {}
+
+
+def _build_agent(tools: list):
+    """
+    Return a compiled ReAct agent for the given tool subset.
+    Agents are cached by their tool combination — no redundant recompilation
+    when the router selects the same tools across requests.
+    """
+    cache_key = frozenset(t.name for t in tools)
+    if cache_key not in _agent_cache:
+        llm = _get_llm()
+        _agent_cache[cache_key] = create_react_agent(
+            model=llm.bind_tools(tools),
+            tools=tools,
+            prompt=_BOT_SYSTEM_PROMPT,
+        )
+        logger.info(
+            "━━━ [AGENT CACHE] Compiled new agent for tool combination: %s",
+            sorted(cache_key),
+        )
+    else:
+        logger.info(
+            "━━━ [AGENT CACHE] Reusing cached agent for: %s",
+            sorted(cache_key),
+        )
+    return _agent_cache[cache_key]
 
 
 _bot = None
@@ -753,27 +912,55 @@ _bot = None
 
 def get_bot():
     """
-    Return the compiled ReAct agent graph.
+    Return a callable that routes each query then runs the ReAct agent.
 
-    On the first call this will:
-      1. Verify / create the Neo4j vector index (idempotent).
-      2. Initialise the LLM singleton.
-      3. Compile the LangGraph ReAct graph.
+    The returned object exposes .astream() so routes/chat.py needs no changes.
 
-    Subsequent calls return the cached graph immediately.
-
-    Usage in routes/chat.py:
-        from agent.bot import get_bot
-        graph = get_bot()
-        initial_state = {"messages": messages}
-        async for chunk, metadata in graph.astream(initial_state,
-                                                    stream_mode="messages"):
-            ...
+    Graph topology:
+        START → router_node → react_agent (with subset of tools) → END
     """
     global _bot  # noqa: PLW0603
     if _bot is None:
-        logger.info("Initialising TradeMate ReAct bot …")
+        logger.info("Initialising TradeMate ReAct bot with Router …")
         _ensure_index()
-        _bot = _build_bot()
-        logger.info("ReAct bot ready.")
+        # Pre-warm singletons
+        _get_llm()
+        _get_router_llm()
+        _bot = _RouterAgent()
+        logger.info(
+            "ReAct bot ready. Tool registry: %s", list(_TOOL_MAP.keys())
+        )
     return _bot
+
+
+class _RouterAgent:
+    """
+    Wraps the router + dynamic agent into a single object that mimics the
+    LangGraph compiled graph interface (astream).
+
+    Flow per request:
+      1. Router LLM classifies the query → selects N tools
+      2. A ReAct agent is compiled with only those N tools
+      3. Agent streams the response
+    """
+
+    async def astream(self, state: dict, stream_mode: str = "messages"):
+        query = ""
+        for msg in reversed(state.get("messages", [])):
+            if hasattr(msg, "type") and msg.type == "human":
+                query = msg.content if isinstance(msg.content, str) else ""
+                break
+
+        # ── Route ──────────────────────────────────────────────────────────
+        selected_tools = _route_query(query)
+
+        # ── Build agent with selected tools only ───────────────────────────
+        agent = _build_agent(selected_tools)
+        logger.info(
+            "━━━ [AGENT] Compiled with tools: %s",
+            [t.name for t in selected_tools],
+        )
+
+        # ── Stream ─────────────────────────────────────────────────────────
+        async for chunk, metadata in agent.astream(state, stream_mode=stream_mode):
+            yield chunk, metadata
