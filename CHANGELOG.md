@@ -1,5 +1,10 @@
 # CHANGELOG
 
+### v5.3.0 - 04/17/2026
+#### Added
+- **Route Widget (UI):** Interactive maps built with React/Leaflet/CartoDB to visually plot international sea/air freight legs directly within the chat interface, containing interactive route cards and cost breakdowns.
+- **Real-Time Freightos API:** Integrated the public Freightos shipping calculator (FaaS) to pull live spot quotes for ocean/air freight (FCL/LCL) concurrently. The system automatically tags results as "(Live Freightos Rate)" or gracefully falls back to cached estimates.
+- **Cost Engine:** A comprehensive backend pipeline (`route_engine.py`) that calculates total landed Double Duty Paid (DDP) logistics costs. It dynamically adds up Origin Inland Haulage, Origin/Transshipment/Destination THC, Base Freight, Customs Brokerage, Destination Drayage, US Federal fees (HMF/MPF limits), and assessed HS Duty percentages.
 
 ### v5.2.0 - 04/17/2026
 #### Added

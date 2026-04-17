@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { Conversation, Message } from "@/types";
+import type { Conversation, Message, MessageWidget } from "@/types";
 import { generateId, deriveTitleFromMessage } from "@/lib/utils";
 
 interface ChatState {
@@ -17,6 +17,7 @@ interface ChatState {
   setActiveConversation: (id: string | null) => void;
   addMessage: (conversationId: string, message: Omit<Message, "id" | "createdAt">) => string;
   updateLastAssistantMessage: (conversationId: string, content: string) => void;
+  attachWidgetToLastMessage: (conversationId: string, widget: MessageWidget) => void;
   setStreaming: (value: boolean) => void;
   setSelectedModel: (modelId: string) => void;
   getActiveConversation: () => Conversation | undefined;
@@ -105,6 +106,20 @@ export const useChatStore = create<ChatState>()(
               messages[lastIdx] = { ...messages[lastIdx], content };
             }
             return { ...conv, messages, updatedAt: new Date() };
+          }),
+        }));
+      },
+
+      attachWidgetToLastMessage: (conversationId, widget) => {
+        set((state) => ({
+          conversations: state.conversations.map((conv) => {
+            if (conv.id !== conversationId) return conv;
+            const messages = [...conv.messages];
+            const lastIdx = messages.length - 1;
+            if (lastIdx >= 0 && messages[lastIdx].role === "assistant") {
+              messages[lastIdx] = { ...messages[lastIdx], widget };
+            }
+            return { ...conv, messages };
           }),
         }));
       },

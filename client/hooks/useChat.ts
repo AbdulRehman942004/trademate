@@ -13,6 +13,7 @@ export function useChat() {
     conversations,
     addMessage,
     updateLastAssistantMessage,
+    attachWidgetToLastMessage,
     setStreaming,
     setConversationTitle,
     isStreaming,
@@ -39,6 +40,7 @@ export function useChat() {
           history,
           (accumulated) => updateLastAssistantMessage(conversationId, accumulated),
           (title) => setConversationTitle(conversationId, title),
+          (widget) => attachWidgetToLastMessage(conversationId, widget),
         );
       } catch (err) {
         const detail = err instanceof Error ? err.message : "Something went wrong.";
@@ -47,7 +49,7 @@ export function useChat() {
         setStreaming(false);
       }
     },
-    [conversations, addMessage, updateLastAssistantMessage, setStreaming, setConversationTitle, isStreaming]
+    [conversations, addMessage, updateLastAssistantMessage, attachWidgetToLastMessage, setStreaming, setConversationTitle, isStreaming]
   );
 
   return { sendMessage, isStreaming };

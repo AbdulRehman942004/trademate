@@ -14,6 +14,7 @@ from database.database import create_db_tables
 from routes.auth import router as auth_router
 from routes.chat import router as chat_router
 from routes.conversations import router as conversations_router
+from routes.routes import router as routes_router
 
 
 @asynccontextmanager
@@ -37,6 +38,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(conversations_router)
+app.include_router(routes_router)
 
 
 @app.get("/")

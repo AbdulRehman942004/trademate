@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { SquarePen, TrendingUp, Search, LogOut } from "lucide-react";
+import { useRouter, usePathname } from "next/navigation";
+import { SquarePen, TrendingUp, Search, LogOut, Route } from "lucide-react";
 import { useChatStore } from "@/stores/chatStore";
 import { useAuthStore } from "@/stores/authStore";
 import { useLogout } from "@/hooks/useAuth";
@@ -27,6 +27,7 @@ export function Sidebar({ className }: SidebarProps) {
 
   const { user } = useAuthStore();
   const logout = useLogout();
+  const pathname = usePathname();
 
   const handleNewChat = () => {
     const id = createConversation();
@@ -81,6 +82,22 @@ export function Sidebar({ className }: SidebarProps) {
           <Search size={13} />
           <span>Search chats…</span>
         </div>
+      </div>
+
+      {/* Navigation links */}
+      <div className="px-2 mb-2">
+        <button
+          onClick={() => router.push("/routes")}
+          className={cn(
+            "w-full flex items-center gap-2.5 px-3 h-8 rounded-lg text-sm transition-colors",
+            pathname?.startsWith("/routes")
+              ? "bg-violet-100 dark:bg-violet-950/40 text-violet-700 dark:text-violet-300 font-medium"
+              : "text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-800 dark:hover:text-zinc-100"
+          )}
+        >
+          <Route size={13} />
+          <span>Route Evaluator</span>
+        </button>
       </div>
 
       {/* Conversation list */}

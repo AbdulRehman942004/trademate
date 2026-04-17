@@ -40,11 +40,19 @@ Security Guarantees
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import re
 from pathlib import Path
 from typing import Optional
+
+# Mutable list injected per-request so the evaluate_shipping_routes tool can
+# pass its full result back to the SSE stream without changing any interfaces.
+# chat.py sets this to a fresh list before each agent invocation.
+route_widget_ctx: contextvars.ContextVar[list | None] = contextvars.ContextVar(
+    "route_widget_ctx", default=None
+)
 
 from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage
@@ -645,13 +653,128 @@ def search_trade_documents(query: str) -> str:
         )
 
 
+# ── Route evaluation tool ────────────────────────────────────────────────────
+
+
+class _RouteEvalInput(BaseModel):
+    origin_city: str = Field(
+        description="Origin city in Pakistan (e.g. Karachi, Lahore, Faisalabad, Sialkot, Islamabad, Multan, Peshawar)"
+    )
+    destination_city: str = Field(
+        description="Destination city in the USA (e.g. Los Angeles, New York, Chicago, Miami, Savannah, Seattle). MUST be spelled correctly."
+    )
+    cargo_type: str = Field(
+        description="Cargo type: FCL_20, FCL_40, FCL_40HC, LCL, or AIR"
+    )
+    cargo_value_usd: float = Field(
+        description="Total declared cargo value in USD"
+    )
+    hs_code: Optional[str] = Field(
+        default=None,
+        description="HS code (first 2–6 digits) for import duty calculation, if known"
+    )
+    cargo_volume_cbm: Optional[float] = Field(
+        default=None,
+        description="Cargo volume in CBM — required for LCL shipments"
+    )
+    cargo_weight_kg: Optional[float] = Field(
+        default=None,
+        description="Cargo weight in kg — required for AIR shipments"
+    )
+    cost_weight: float = Field(
+        default=0.5,
+        description="Optimization preference: 0 = fastest, 1 = cheapest, 0.5 = balanced"
+    )
+
+
+@tool("evaluate_shipping_routes", args_schema=_RouteEvalInput)
+def evaluate_shipping_routes(
+    origin_city: str,
+    destination_city: str,
+    cargo_type: str,
+    cargo_value_usd: float,
+    hs_code: Optional[str] = None,
+    cargo_volume_cbm: Optional[float] = None,
+    cargo_weight_kg: Optional[float] = None,
+    cost_weight: float = 0.5,
+) -> str:
+    """
+    Evaluate all viable shipping routes from a Pakistan city to a USA city.
+
+    Use this tool when the user asks about:
+    - Shipping routes from Pakistan to the USA
+    - Freight costs, ocean freight rates, air freight rates
+    - Transit times for Pakistan → USA shipments
+    - Comparing shipping options (FCL, LCL, Air)
+    - Import duties, logistics costs, or total landed cost estimates
+
+    Returns a summary of available routes with costs, transit times, and
+    carrier options. An interactive route widget will be shown to the user.
+
+    DO NOT use this tool for HS code lookups, tariff rates, or trade policy questions —
+    use the Neo4j tools for those.
+    """
+    try:
+        from schemas.routes import RouteEvaluationRequest
+        from services.route_engine import evaluate_routes
+
+        req = RouteEvaluationRequest(
+            origin_city=origin_city,
+            destination_city=destination_city,
+            cargo_type=cargo_type,
+            cargo_value_usd=cargo_value_usd,
+            hs_code=hs_code or None,
+            cargo_volume_cbm=cargo_volume_cbm,
+            cargo_weight_kg=cargo_weight_kg,
+            cost_weight=cost_weight,
+        )
+        result = evaluate_routes(req)
+
+        # Push full result into the per-request widget store so chat.py can
+        # emit a widget SSE event after the text stream completes.
+        store = route_widget_ctx.get(None)
+        if store is not None:
+            store.append(result.model_dump())
+
+        # Return a concise human-readable summary for the LLM to use.
+        def _fmt(n: float) -> str:
+            return f"${n:,.0f}"
+
+        lines = [
+            f"{len(result.routes)} routes found: {result.origin_city} → {result.destination_city}",
+            f"Cargo type: {result.cargo_type} | Value: {_fmt(result.cargo_value_usd)} | Duty rate: {result.duty_rate_pct}%",
+            "",
+        ]
+        for route in result.routes:
+            tag = f" [{route.tag.upper()}]" if route.tag else ""
+            source = " (Live Freightos Rate)" if route.rate_source == "live" else ""
+            lines.append(
+                f"• {route.name}{tag} — "
+                f"Cost{source}: {_fmt(route.cost.total_min)}–{_fmt(route.cost.total_max)} | "
+                f"Transit: {route.transit.total_min}–{route.transit.total_max} days | "
+                f"Reliability: {round(route.reliability_score * 100)}%"
+            )
+        lines += [
+            "",
+            f"Recommended: Cheapest={result.recommended['cheapest']}  "
+            f"Fastest={result.recommended['fastest']}  "
+            f"Balanced={result.recommended['balanced']}",
+        ]
+        logger.info("━━━ [ROUTE TOOL] Evaluated %d routes for %s→%s", len(result.routes), origin_city, destination_city)
+        return "\n".join(lines)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("━━━ [ROUTE TOOL] Failed: %s", exc)
+        return f"Route evaluation failed: {exc}"
+
+
 # ── agent system prompt ───────────────────────────────────────────────────────
 
 _BOT_SYSTEM_PROMPT = SystemMessage(content="""\
 You are TradeMate, an expert AI assistant specialising in international trade,
 Harmonized System (HS) codes, import/export regulations, and tariff schedules.
 
-You have access to three tools:
+You have access to four tools:
 
   1. search_pakistan_hs_data  [Neo4j — Graph DB]
      → Pakistan PCT (Pakistan Customs Tariff) database (:PK schema)
@@ -672,6 +795,12 @@ You have access to three tools:
        compliance guidelines, any question needing document-level context
      → Call this alongside the Neo4j tools for richer answers
 
+  4. evaluate_shipping_routes  [Route Engine]
+     → Evaluates all viable Pakistan → USA shipping routes
+     → Returns cost breakdown, transit times, carrier options, live freight rates
+     → Use for: shipping route questions, freight cost estimates, logistics planning
+     → When this tool is called, an interactive route widget is shown to the user
+
 Rules you MUST follow
 ──────────────────────
 • ALWAYS call at least one tool for EVERY user question — no exceptions.
@@ -686,11 +815,21 @@ Rules you MUST follow
 • For general "what is X" or "tell me about X" trade questions: call
   search_trade_documents AND the relevant Neo4j tools.
 • For cross-country comparisons: call BOTH Neo4j tools.
+• For shipping route, freight cost, logistics, or transit time questions:
+  call evaluate_shipping_routes. An interactive widget will be rendered for the user.
 • ONLY cite HS codes and duty rates that appear verbatim in tool results.
   Never invent, estimate, interpolate, or recall rates from training data.
 • If all tools return no data, say so clearly and suggest a more specific query.
 • Label every rate you quote with its source country and duty type.
 • Use bullet points or tables when listing multiple rates — clarity matters.
+
+When evaluate_shipping_routes is called
+────────────────────────────────────────
+• Give a brief conversational summary (2–4 sentences): mention the recommended
+  route, cheapest cost range, and fastest transit time.
+• Do NOT repeat every route's numbers — the user sees an interactive widget.
+• End with one sentence like: "The full breakdown with all routes is shown in the
+  widget below."
 
 Response style — STRICTLY ENFORCED
 ────────────────────────────────────
@@ -753,7 +892,7 @@ _llm: Optional[ChatOpenAI] = None
 # ── Tool registry ─────────────────────────────────────────────────────────────
 # Add new tools here — the router will automatically learn to select them.
 
-_ALL_TOOLS = [search_pakistan_hs_data, search_us_hs_data, search_trade_documents]
+_ALL_TOOLS = [search_pakistan_hs_data, search_us_hs_data, search_trade_documents, evaluate_shipping_routes]
 _TOOL_MAP  = {t.name: t for t in _ALL_TOOLS}
 
 # ── Router ────────────────────────────────────────────────────────────────────
@@ -766,16 +905,18 @@ Available tools:
   - search_pakistan_hs_data   → Pakistan PCT: HS codes, tariffs, cess, exemptions, procedures
   - search_us_hs_data         → US HTS: HS codes, duty rates, trade classifications
   - search_trade_documents    → Policy documents, trade agreements, SROs, regulations
+  - evaluate_shipping_routes  → Shipping routes, freight costs, transit times, logistics (Pakistan → USA)
 
 Rules:
   • Return ONLY a JSON array of tool names needed. Nothing else.
-  • If the query mentions Pakistan or no country: include search_pakistan_hs_data.
-  • If the query mentions US/America/United States: include search_us_hs_data.
+  • If the query is about shipping routes, freight, logistics, transit times, or shipping costs: include evaluate_shipping_routes.
+  • If the query mentions Pakistan HS codes, tariffs, or customs: include search_pakistan_hs_data.
+  • If the query mentions US/America/United States tariffs or HTS: include search_us_hs_data.
   • If the query asks about a product with no country: include BOTH Neo4j tools.
   • If the query is about policy, regulations, agreements, or general trade context: include search_trade_documents.
   • For comparisons between countries: include all relevant country tools.
   • Always include search_trade_documents for general "what is X" questions.
-  • Minimum 1 tool, maximum 3 tools.
+  • Minimum 1 tool, maximum 4 tools.
 
 Examples:
   "what is the hs code for smartphones in pakistan"
@@ -792,6 +933,15 @@ Examples:
 
   "what are automotive products"
       → ["search_pakistan_hs_data", "search_us_hs_data", "search_trade_documents"]
+
+  "show me shipping routes from karachi to new york for fcl 40"
+      → ["evaluate_shipping_routes"]
+
+  "how much does it cost to ship from lahore to los angeles"
+      → ["evaluate_shipping_routes"]
+
+  "what is the cheapest way to ship textiles from pakistan to usa"
+      → ["evaluate_shipping_routes", "search_pakistan_hs_data"]
 
 Respond with ONLY the JSON array. No explanation, no markdown.
 """

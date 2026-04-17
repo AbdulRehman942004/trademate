@@ -2,10 +2,17 @@
 
 import { useState } from "react";
 import { Copy, Check, ThumbsUp, ThumbsDown, RotateCcw } from "lucide-react";
+import dynamic from "next/dynamic";
 import type { Message } from "@/types";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { IconButton } from "@/components/ui/IconButton";
 import { cn } from "@/lib/cn";
+
+// Leaflet accesses window/document at import time — must be client-only
+const RouteWidget = dynamic(
+  () => import("./RouteWidget").then((m) => ({ default: m.RouteWidget })),
+  { ssr: false }
+);
 
 interface ChatMessageProps {
   message: Message;
@@ -60,6 +67,11 @@ export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
 
         {/* Streaming cursor appended while streaming */}
         {isStreaming && message.content && <StreamingCursor inline />}
+
+        {/* Inline route widget — rendered after streaming completes */}
+        {!isStreaming && message.widget?.type === "route_evaluation" && (
+          <RouteWidget data={message.widget.data} />
+        )}
 
         {/* Action bar — visible on hover when not streaming */}
         {!isStreaming && message.content && (

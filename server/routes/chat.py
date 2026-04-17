@@ -30,7 +30,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Sys
 from langchain_openai import ChatOpenAI
 from sqlmodel import Session, select
 
-from agent.bot import get_bot
+from agent.bot import get_bot, route_widget_ctx
 from database.database import engine
 from models.conversation import Conversation, Message
 from schemas.chat import ChatRequest
@@ -211,6 +211,10 @@ async def _stream_agent(
         tools_called: list[str] = []
         reply_chunks: list[str] = []
 
+        # Per-request widget store: evaluate_shipping_routes tool appends here
+        widget_store: list = []
+        token = route_widget_ctx.set(widget_store)
+
         async for chunk, metadata in graph.astream(initial_state, stream_mode="messages"):
             # Track tool calls for logging + persistence
             node = metadata.get("langgraph_node", "")
@@ -231,6 +235,9 @@ async def _stream_agent(
                     "content": chunk.content,
                     "conversation_id": conversation_id,
                 })
+
+        # Restore context var
+        route_widget_ctx.reset(token)
 
         # Persist the full assistant reply
         full_reply = "".join(reply_chunks)
@@ -253,6 +260,16 @@ async def _stream_agent(
             )
 
         yield _sse({"type": "done", "conversation_id": conversation_id})
+
+        # If the route tool was called, emit a widget event with the full data
+        if widget_store:
+            yield _sse({
+                "type": "widget",
+                "widget_type": "route_evaluation",
+                "data": widget_store[0],
+                "conversation_id": conversation_id,
+            })
+            logger.info("━━━ [WIDGET] Sent route_evaluation widget for conv %s", conversation_id)
 
         # Generate and stream title only for the first message
         if is_first_message and full_reply:

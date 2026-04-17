@@ -10,7 +10,7 @@ const BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL ?? "http://localhost:8000";
 const axiosInstance = axios.create({
   baseURL: BASE_URL,
   headers: { "Content-Type": "application/json" },
-  timeout: 15_000,
+  timeout: 30_000,
 });
 
 // ── Request interceptor — attach Bearer token ───────────────────────────────
