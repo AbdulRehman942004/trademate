@@ -7,7 +7,13 @@ Run:
     python ingest_pk.py
 
 All leaf-node steps use UNWIND batching (500 rows per transaction) to minimise
-network round-trips to Neo4j Aura.  Re-running is safe — every write uses MERGE.
+network round-trips.  Re-running is safe — every write uses MERGE.
+
+Checkpointer (crash-resume)
+───────────────────────────
+On startup each step queries the live DB for its node type's existing IDs and
+builds an O(1) lookup set.  Any row whose UID / HS code is already present is
+skipped before embeddings are generated or any DB writes are attempted.
 """
 
 import hashlib
@@ -98,8 +104,38 @@ def run_batched(session, cypher: str, rows: list[dict], desc: str) -> None:
     """Send rows to Neo4j in chunks of NEO4J_BATCH using UNWIND."""
     total = len(rows)
     for start in tqdm(range(0, total, NEO4J_BATCH), desc=f"  {desc}", unit="batch"):
-        batch = rows[start : start + NEO4J_BATCH]
-        session.run(cypher, batch=batch)
+        session.run(cypher, batch=rows[start : start + NEO4J_BATCH])
+
+
+# ---------------------------------------------------------------------------
+# Checkpointer
+# ---------------------------------------------------------------------------
+
+def load_checkpoint(driver, label: str, id_field: str) -> set[str]:
+    """
+    Query the DB and return the set of all existing ``id_field`` values for
+    nodes with the given label.  Returns an empty set on any error so the
+    pipeline degrades to a full re-run rather than crashing.
+    """
+    try:
+        with driver.session() as session:
+            result = session.run(
+                f"MATCH (n:{label}) WHERE n.{id_field} IS NOT NULL "
+                f"RETURN n.{id_field} AS id"
+            )
+            ids: set[str] = {record["id"] for record in result}
+        logger.info(
+            "  Checkpointer [%s.%s]: %d existing record(s) found in DB.",
+            label, id_field, len(ids),
+        )
+        return ids
+    except Exception as exc:
+        logger.warning(
+            "  Checkpointer query failed for [%s.%s] — proceeding without "
+            "checkpoint (full re-run). Error: %s",
+            label, id_field, exc,
+        )
+        return set()
 
 
 # ---------------------------------------------------------------------------
@@ -156,19 +192,49 @@ def ingest_hierarchy(driver, embeddings_model) -> None:
     df = load_csv(PCT_CSV)
     logger.info("  Loaded %d rows from %s", len(df), PCT_CSV.name)
 
-    texts = [_build_embedding_text(row) for _, row in df.iterrows()]
+    # ── Checkpointer ────────────────────────────────────────────────────────
+    existing_codes = load_checkpoint(driver, "HSCode:PK", "code")
 
-    logger.info("  Generating embeddings (batch=%d) …", EMBED_BATCH)
-    all_embeddings: list[list[float]] = []
-    for start in tqdm(range(0, len(texts), EMBED_BATCH), desc="  Embedding batches"):
-        all_embeddings.extend(embeddings_model.embed_documents(texts[start : start + EMBED_BATCH]))
+    # Build a filtered list of (row, hs_code) for new entries only.
+    # We must filter before building embedding texts so OpenAI is never called
+    # for rows that are already in the DB.
+    new_items: list[tuple[pd.Series, str]] = []
+    skipped_ckpt = 0
+    skipped_no_code = 0
 
-    # Build list of dicts for UNWIND
-    rows: list[dict] = []
-    for i, (_, row) in enumerate(df.iterrows()):
+    for _, row in df.iterrows():
         hs_code = normalize_hs(row.get("HS Code"))
         if not hs_code:
+            skipped_no_code += 1
             continue
+        if hs_code in existing_codes:
+            skipped_ckpt += 1
+            continue
+        new_items.append((row, hs_code))
+
+    logger.info(
+        "  Checkpointer: %d already in DB (skipped), %d missing HS code, "
+        "%d new rows to embed and write.",
+        skipped_ckpt, skipped_no_code, len(new_items),
+    )
+
+    if not new_items:
+        logger.info("  All hierarchy rows already ingested — skipping step.")
+        return
+
+    # ── Embeddings (only for new rows) ──────────────────────────────────────
+    texts = [_build_embedding_text(row) for row, _ in new_items]
+    logger.info("  Generating embeddings for %d new rows (batch=%d) …", len(texts), EMBED_BATCH)
+
+    all_embeddings: list[list[float]] = []
+    for start in tqdm(range(0, len(texts), EMBED_BATCH), desc="  Embedding batches"):
+        all_embeddings.extend(
+            embeddings_model.embed_documents(texts[start : start + EMBED_BATCH])
+        )
+
+    # ── Build DB rows ────────────────────────────────────────────────────────
+    rows: list[dict] = []
+    for (row, hs_code), emb in zip(new_items, all_embeddings):
         rows.append({
             "chapter_code":    clean(row.get("Chapter Code"))            or "UNKNOWN",
             "chapter_desc":    clean(row.get("Chapter Description"))     or "",
@@ -181,7 +247,7 @@ def ingest_hierarchy(driver, embeddings_model) -> None:
             "hs_code":         hs_code,
             "hs_desc":         clean(row.get("Description"))             or "",
             "full_label":      clean(row.get("Full Code"))               or "",
-            "embedding":       all_embeddings[i],
+            "embedding":       emb,
         })
 
     logger.info("  Writing %d hierarchy rows to Neo4j (batch=%d) …", len(rows), NEO4J_BATCH)
@@ -229,20 +295,28 @@ def ingest_tariffs(driver) -> None:
     df = load_csv(TARIFFS_CSV)
     logger.info("  Loaded %d rows from %s", len(df), TARIFFS_CSV.name)
 
+    existing_uids = load_checkpoint(driver, "Tariff:PK", "uid")
+
     rows: list[dict] = []
-    skipped = 0
+    skipped_ckpt = 0
+    skipped_no_code = 0
+
     for _, row in df.iterrows():
         hs_code = normalize_hs(row.get("HS Code"))
         if not hs_code:
-            skipped += 1
+            skipped_no_code += 1
             continue
         for prefix, duty_name in DUTY_TYPES.items():
             rate = clean(row.get(f"{prefix}_Rate"))
             if rate is None:
                 continue
             valid_from = clean(row.get(f"{prefix}_ValidFrom"))
+            uid = make_uid(hs_code, prefix, rate, valid_from)
+            if uid in existing_uids:
+                skipped_ckpt += 1
+                continue
             rows.append({
-                "uid":        make_uid(hs_code, prefix, rate, valid_from),
+                "uid":        uid,
                 "hs_code":    hs_code,
                 "duty_type":  prefix,
                 "duty_name":  duty_name,
@@ -251,7 +325,16 @@ def ingest_tariffs(driver) -> None:
                 "valid_to":   clean(row.get(f"{prefix}_ValidTo")),
             })
 
-    logger.info("  Expanded to %d Tariff records (skipped %d rows with no HS code)", len(rows), skipped)
+    logger.info(
+        "  Checkpointer: %d already in DB (skipped), %d new Tariff records "
+        "(skipped %d rows with no HS code).",
+        skipped_ckpt, len(rows), skipped_no_code,
+    )
+
+    if not rows:
+        logger.info("  All tariff records already ingested — skipping step.")
+        return
+
     with driver.session() as session:
         run_batched(session, _TARIFF_CYPHER, rows, "Tariff batches")
     logger.info("  Tariffs ingestion complete.")
@@ -285,17 +368,25 @@ def ingest_cess(driver) -> None:
     df = load_csv(CESS_CSV)
     logger.info("  Loaded %d rows from %s", len(df), CESS_CSV.name)
 
+    existing_uids = load_checkpoint(driver, "Cess:PK", "uid")
+
     rows: list[dict] = []
-    skipped = 0
+    skipped_ckpt = 0
+    skipped_no_code = 0
+
     for _, row in df.iterrows():
         hs_code = normalize_hs(row.get("HS Code"))
         if not hs_code:
-            skipped += 1
+            skipped_no_code += 1
             continue
-        province = clean(row.get("Province"))
+        province  = clean(row.get("Province"))
         cess_desc = clean(row.get("Cess Description"))
+        uid = make_uid(hs_code, province, cess_desc)
+        if uid in existing_uids:
+            skipped_ckpt += 1
+            continue
         rows.append({
-            "uid":              make_uid(hs_code, province, cess_desc),
+            "uid":              uid,
             "hs_code":          hs_code,
             "province":         province,
             "cess_description": cess_desc,
@@ -305,7 +396,16 @@ def ingest_cess(driver) -> None:
             "reverse_transit":  clean(row.get("Reverse Transit")),
         })
 
-    logger.info("  %d Cess records (skipped %d)", len(rows), skipped)
+    logger.info(
+        "  Checkpointer: %d already in DB (skipped), %d new Cess records "
+        "(skipped %d rows with no HS code).",
+        skipped_ckpt, len(rows), skipped_no_code,
+    )
+
+    if not rows:
+        logger.info("  All cess records already ingested — skipping step.")
+        return
+
     with driver.session() as session:
         run_batched(session, _CESS_CYPHER, rows, "Cess batches")
     logger.info("  Cess ingestion complete.")
@@ -341,18 +441,26 @@ def ingest_exemptions(driver) -> None:
     df = load_csv(EXEMPTIONS_CSV)
     logger.info("  Loaded %d rows from %s", len(df), EXEMPTIONS_CSV.name)
 
+    existing_uids = load_checkpoint(driver, "Exemption:PK", "uid")
+
     rows: list[dict] = []
-    skipped = 0
+    skipped_ckpt = 0
+    skipped_no_code = 0
+
     for _, row in df.iterrows():
         hs_code = normalize_hs(row.get("HS Code"))
         if not hs_code:
-            skipped += 1
+            skipped_no_code += 1
             continue
         exemption_type = clean(row.get("Exemption/Concession"))
         activity       = clean(row.get("Activity"))
         rate           = clean(row.get("Rate"))
+        uid = make_uid(hs_code, exemption_type, activity, rate)
+        if uid in existing_uids:
+            skipped_ckpt += 1
+            continue
         rows.append({
-            "uid":             make_uid(hs_code, exemption_type, activity, rate),
+            "uid":             uid,
             "hs_code":         hs_code,
             "exemption_type":  exemption_type,
             "exemption_desc":  clean(row.get("Exemption Description")),
@@ -364,7 +472,16 @@ def ingest_exemptions(driver) -> None:
             "valid_to":        clean(row.get("Valid To")),
         })
 
-    logger.info("  %d Exemption records (skipped %d)", len(rows), skipped)
+    logger.info(
+        "  Checkpointer: %d already in DB (skipped), %d new Exemption records "
+        "(skipped %d rows with no HS code).",
+        skipped_ckpt, len(rows), skipped_no_code,
+    )
+
+    if not rows:
+        logger.info("  All exemption records already ingested — skipping step.")
+        return
+
     with driver.session() as session:
         run_batched(session, _EXEMPTION_CYPHER, rows, "Exemption batches")
     logger.info("  Exemptions ingestion complete.")
@@ -394,7 +511,6 @@ MERGE (hs)-[:HAS_ANTI_DUMPING]->(a)
 def ingest_antidump(driver) -> None:
     logger.info("═══ STEP 2d: Ingesting Anti-Dumping Duties ═══")
 
-    # antidump CSV has two columns both named "Description" — rename them
     raw = load_csv(ANTIDUMP_CSV)
     cols = list(raw.columns)
     desc_idx = [i for i, c in enumerate(cols) if c == "Description"]
@@ -405,17 +521,25 @@ def ingest_antidump(driver) -> None:
 
     logger.info("  Loaded %d rows from %s", len(raw), ANTIDUMP_CSV.name)
 
+    existing_uids = load_checkpoint(driver, "AntiDumpingDuty:PK", "uid")
+
     rows: list[dict] = []
-    skipped = 0
+    skipped_ckpt = 0
+    skipped_no_code = 0
+
     for _, row in raw.iterrows():
         hs_code = normalize_hs(row.get("HS Code"))
         if not hs_code:
-            skipped += 1
+            skipped_no_code += 1
             continue
         exporter = clean(row.get("exporter"))
         rate     = clean(row.get("Rate"))
+        uid = make_uid(hs_code, exporter, rate)
+        if uid in existing_uids:
+            skipped_ckpt += 1
+            continue
         rows.append({
-            "uid":        make_uid(hs_code, exporter, rate),
+            "uid":        uid,
             "hs_code":    hs_code,
             "exporter":   exporter,
             "rate":       rate,
@@ -423,7 +547,16 @@ def ingest_antidump(driver) -> None:
             "valid_to":   clean(row.get("Valid To")),
         })
 
-    logger.info("  %d Anti-dumping records (skipped %d)", len(rows), skipped)
+    logger.info(
+        "  Checkpointer: %d already in DB (skipped), %d new Anti-dumping records "
+        "(skipped %d rows with no HS code).",
+        skipped_ckpt, len(rows), skipped_no_code,
+    )
+
+    if not rows:
+        logger.info("  All anti-dumping records already ingested — skipping step.")
+        return
+
     with driver.session() as session:
         run_batched(session, _ANTIDUMP_CYPHER, rows, "Anti-dump batches")
     logger.info("  Anti-dumping ingestion complete.")
@@ -454,17 +587,25 @@ def ingest_procedures(driver) -> None:
     df = load_csv(PROCEDURES_CSV)
     logger.info("  Loaded %d rows from %s", len(df), PROCEDURES_CSV.name)
 
+    existing_uids = load_checkpoint(driver, "Procedure:PK", "uid")
+
     rows: list[dict] = []
-    skipped = 0
+    skipped_ckpt = 0
+    skipped_no_code = 0
+
     for _, row in df.iterrows():
         hs_code = normalize_hs(row.get("HS Code"))
         if not hs_code:
-            skipped += 1
+            skipped_no_code += 1
             continue
         name     = clean(row.get("Name"))
         category = clean(row.get("Category"))
+        uid = make_uid(hs_code, name, category)
+        if uid in existing_uids:
+            skipped_ckpt += 1
+            continue
         rows.append({
-            "uid":         make_uid(hs_code, name, category),
+            "uid":         uid,
             "hs_code":     hs_code,
             "name":        name,
             "description": clean(row.get("Procedure Description")),
@@ -472,7 +613,16 @@ def ingest_procedures(driver) -> None:
             "url":         clean(row.get("Procedure URL")),
         })
 
-    logger.info("  %d Procedure records (skipped %d)", len(rows), skipped)
+    logger.info(
+        "  Checkpointer: %d already in DB (skipped), %d new Procedure records "
+        "(skipped %d rows with no HS code).",
+        skipped_ckpt, len(rows), skipped_no_code,
+    )
+
+    if not rows:
+        logger.info("  All procedure records already ingested — skipping step.")
+        return
+
     with driver.session() as session:
         run_batched(session, _PROCEDURE_CYPHER, rows, "Procedure batches")
     logger.info("  Procedures ingestion complete.")
@@ -509,17 +659,25 @@ def ingest_measures(driver) -> None:
     df = load_csv(MEASURES_CSV)
     logger.info("  Loaded %d rows from %s", len(df), MEASURES_CSV.name)
 
+    existing_uids = load_checkpoint(driver, "Measure:PK", "uid")
+
     rows: list[dict] = []
-    skipped = 0
+    skipped_ckpt = 0
+    skipped_no_code = 0
+
     for _, row in df.iterrows():
         hs_code = normalize_hs(row.get("HS Code"))
         if not hs_code:
-            skipped += 1
+            skipped_no_code += 1
             continue
         name   = clean(row.get("Name"))
         m_type = clean(row.get("Type"))
+        uid = make_uid(hs_code, name, m_type)
+        if uid in existing_uids:
+            skipped_ckpt += 1
+            continue
         rows.append({
-            "uid":         make_uid(hs_code, name, m_type),
+            "uid":         uid,
             "hs_code":     hs_code,
             "name":        name,
             "type":        m_type,
@@ -531,7 +689,16 @@ def ingest_measures(driver) -> None:
             "url":         clean(row.get("Measure URL")),
         })
 
-    logger.info("  %d Measure records (skipped %d)", len(rows), skipped)
+    logger.info(
+        "  Checkpointer: %d already in DB (skipped), %d new Measure records "
+        "(skipped %d rows with no HS code).",
+        skipped_ckpt, len(rows), skipped_no_code,
+    )
+
+    if not rows:
+        logger.info("  All measure records already ingested — skipping step.")
+        return
+
     with driver.session() as session:
         run_batched(session, _MEASURE_CYPHER, rows, "Measure batches")
     logger.info("  Measures ingestion complete.")

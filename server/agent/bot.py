@@ -70,15 +70,13 @@ load_dotenv(override=False)  # server/.env
 logger = logging.getLogger(__name__)
 
 # ── constants ──────────────────────────────────────────────────────────────────
-_INDEX_NAME    = "hscode_embedding_index"
-_EMBED_DIMS    = 1536   # text-embedding-3-small (used for Neo4j vector index)
+_EMBED_DIMS    = 1536   # text-embedding-3-small
+# Memgraph auto-names vector indexes as "Label_property"
+_INDEX_NAME    = "HSCode_embedding"
 
-# db.index.vector.queryNodes has no label awareness — it returns the globally
-# top-FETCH_K nodes across BOTH :PK and :US.  The WHERE label filter then
-# discards the wrong-schema nodes, so we need a large enough pool to guarantee
-# that at least TOP_K nodes of the desired label survive the filter.
-_VECTOR_FETCH_K = 100   # nodes pulled from the shared index before label filter
-_VECTOR_TOP_K   = 5     # nodes returned to the LLM after label filter
+# vector_search.search has no label awareness — wide net then filter by label
+_VECTOR_FETCH_K = 200   # nodes pulled from the index before label filter
+_VECTOR_TOP_K   = 15    # nodes returned to the LLM after label filter
 
 # Pakistan 12-digit HS code (zero-padded by ingest_pk.py)
 _PK_CODE_RE = re.compile(r"^\d{12}$")
@@ -97,27 +95,44 @@ _US_CODE_RE = re.compile(r"^\d{4}(?:\.\d{2}){1,3}$|^\d{6,10}$")
 
 _PK_CODE_CYPHER = """
 MATCH (hs:HSCode:PK {code: $code})
+OPTIONAL MATCH (sh:SubHeading:PK)-[:HAS_HSCODE]->(hs)
+OPTIONAL MATCH (hd:Heading:PK)-[:HAS_SUBHEADING]->(sh)
+OPTIONAL MATCH (sc:SubChapter:PK)-[:HAS_HEADING]->(hd)
+OPTIONAL MATCH (ch:Chapter:PK)-[:HAS_SUBCHAPTER]->(sc)
 OPTIONAL MATCH (hs)-[:HAS_TARIFF]->(t:Tariff)
 OPTIONAL MATCH (hs)-[:HAS_CESS]->(c:Cess)
 OPTIONAL MATCH (hs)-[:HAS_EXEMPTION]->(ex:Exemption)
 OPTIONAL MATCH (hs)-[:REQUIRES_PROCEDURE]->(pr:Procedure)
 RETURN
-    hs.code                                                              AS code,
-    hs.description                                                       AS description,
-    hs.full_label                                                        AS full_label,
-    null                                                                 AS score,
+    hs.code            AS code,
+    hs.description     AS description,
+    hs.full_label      AS full_label,
+    null               AS score,
+    ch.code            AS chapter_code,
+    ch.description     AS chapter_desc,
+    sc.code            AS subchapter_code,
+    sc.description     AS subchapter_desc,
+    hd.code            AS heading_code,
+    hd.description     AS heading_desc,
+    sh.code            AS subheading_code,
+    sh.description     AS subheading_desc,
     collect(DISTINCT {type: t.duty_type,   name: t.duty_name, rate: t.rate})  AS tariffs,
     collect(DISTINCT {province: c.province, import_rate: c.import_rate,
-                      export_rate: c.export_rate})                       AS cess,
-    collect(DISTINCT {description: ex.exemption_desc, rate: ex.rate})   AS exemptions,
-    collect(DISTINCT {name: pr.name, category: pr.category})            AS procedures
+                      export_rate: c.export_rate})                             AS cess,
+    collect(DISTINCT {description: ex.exemption_desc, rate: ex.rate})         AS exemptions,
+    collect(DISTINCT {name: pr.name, category: pr.category})                  AS procedures
 """
 
 _PK_VECTOR_CYPHER = f"""
-CALL db.index.vector.queryNodes('{_INDEX_NAME}', $fetch_k, $query_vector)
-YIELD node AS hs, score
+CALL vector_search.search('{_INDEX_NAME}', $fetch_k, $query_vector)
+YIELD node AS hs, similarity AS score
+WITH hs, score
 WHERE 'PK' IN labels(hs)
 WITH hs, score ORDER BY score DESC LIMIT $top_k
+OPTIONAL MATCH (sh:SubHeading:PK)-[:HAS_HSCODE]->(hs)
+OPTIONAL MATCH (hd:Heading:PK)-[:HAS_SUBHEADING]->(sh)
+OPTIONAL MATCH (sc:SubChapter:PK)-[:HAS_HEADING]->(hd)
+OPTIONAL MATCH (ch:Chapter:PK)-[:HAS_SUBCHAPTER]->(sc)
 OPTIONAL MATCH (hs)-[:HAS_TARIFF]->(t:Tariff)
 OPTIONAL MATCH (hs)-[:HAS_CESS]->(c:Cess)
 OPTIONAL MATCH (hs)-[:HAS_EXEMPTION]->(ex:Exemption)
@@ -127,12 +142,19 @@ RETURN
     hs.description                                                       AS description,
     hs.full_label                                                        AS full_label,
     score,
+    ch.code            AS chapter_code,
+    ch.description     AS chapter_desc,
+    sc.code            AS subchapter_code,
+    sc.description     AS subchapter_desc,
+    hd.code            AS heading_code,
+    hd.description     AS heading_desc,
+    sh.code            AS subheading_code,
+    sh.description     AS subheading_desc,
     collect(DISTINCT {{type: t.duty_type,   name: t.duty_name, rate: t.rate}})  AS tariffs,
     collect(DISTINCT {{province: c.province, import_rate: c.import_rate,
                       export_rate: c.export_rate}})                      AS cess,
     collect(DISTINCT {{description: ex.exemption_desc, rate: ex.rate}})  AS exemptions,
     collect(DISTINCT {{name: pr.name, category: pr.category}})           AS procedures
-ORDER BY score DESC
 """
 
 # --- United States -----------------------------------------------------------
@@ -158,8 +180,9 @@ RETURN
 """
 
 _US_VECTOR_CYPHER = f"""
-CALL db.index.vector.queryNodes('{_INDEX_NAME}', $fetch_k, $query_vector)
-YIELD node AS hs, score
+CALL vector_search.search('{_INDEX_NAME}', $fetch_k, $query_vector)
+YIELD node AS hs, similarity AS score
+WITH hs, score
 WHERE 'US' IN labels(hs)
 WITH hs, score ORDER BY score DESC LIMIT $top_k
 OPTIONAL MATCH (parent:HSCode:US)-[:HAS_CHILD]->(hs)
@@ -176,7 +199,6 @@ RETURN
     parent.hts_code          AS parent_code,
     parent.description       AS parent_description,
     [] AS children
-ORDER BY score DESC
 """
 
 # ── lazy singletons ────────────────────────────────────────────────────────────
@@ -200,12 +222,11 @@ def _get_driver():
         user     = os.getenv("NEO4J_USERNAME")
         password = os.getenv("NEO4J_PASSWORD")
 
-        if not all([uri, user, password]):
-            raise EnvironmentError(
-                "NEO4J_URI, NEO4J_USERNAME, and NEO4J_PASSWORD must all be set in .env"
-            )
+        if not uri:
+            raise EnvironmentError("NEO4J_URI must be set in .env")
 
-        _driver = GraphDatabase.driver(uri, auth=(user, password))
+        auth = (user, password) if user and password else None
+        _driver = GraphDatabase.driver(uri, auth=auth)
         _driver.verify_connectivity()
         logger.info("Neo4j driver initialised → %s", uri)
 
@@ -255,29 +276,29 @@ def _get_pinecone_index():
 
 def _ensure_index() -> None:
     """
-    Idempotently create the shared vector index on HSCode.embedding.
+    Idempotently create the shared vector index on HSCode.embedding (Memgraph syntax).
     Covers both :PK and :US nodes — the WHERE label filter in each query
     restricts which schema is actually searched.
-    Safe to call multiple times (IF NOT EXISTS).
     """
     try:
         driver = _get_driver()
         with driver.session() as session:
             session.run(
                 f"""
-                CREATE VECTOR INDEX {_INDEX_NAME} IF NOT EXISTS
-                FOR (h:HSCode) ON (h.embedding)
-                OPTIONS {{
-                    indexConfig: {{
-                        `vector.dimensions`: {_EMBED_DIMS},
-                        `vector.similarity_function`: 'cosine'
-                    }}
+                CREATE VECTOR INDEX ON :HSCode(embedding)
+                WITH CONFIG {{
+                    "dimension": {_EMBED_DIMS},
+                    "capacity": 500000,
+                    "metric": "cos"
                 }}
                 """
             )
-        logger.info("Vector index '%s' verified / created.", _INDEX_NAME)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not verify vector index: %s", exc)
+        logger.info("Vector index '%s' created.", _INDEX_NAME)
+    except Exception as exc:
+        if "already exists" in str(exc).lower() or "exist" in str(exc).lower():
+            logger.info("Vector index '%s' already exists — skipping.", _INDEX_NAME)
+        else:
+            logger.warning("Could not create vector index: %s", exc)
 
 
 # ── formatters ────────────────────────────────────────────────────────────────
@@ -290,15 +311,25 @@ def _format_pk_results(records: list[dict]) -> str:
 
     blocks: list[str] = []
     for r in records:
-        lines: list[str] = [
-            "─" * 50,
-            f"[Pakistan PCT]  HS Code : {r.get('code', 'N/A')}",
-            f"Description              : {r.get('description', '')}",
-        ]
+        lines: list[str] = ["─" * 50]
+
+        # Hierarchy breadcrumb
+        hierarchy_parts: list[str] = []
+        if r.get("chapter_code"):
+            hierarchy_parts.append(f"Chapter {r['chapter_code']} — {r.get('chapter_desc', '')}")
+        if r.get("subchapter_code"):
+            hierarchy_parts.append(f"Sub-Chapter {r['subchapter_code']} — {r.get('subchapter_desc', '')}")
+        if r.get("heading_code"):
+            hierarchy_parts.append(f"Heading {r['heading_code']} — {r.get('heading_desc', '')}")
+        if r.get("subheading_code"):
+            hierarchy_parts.append(f"Sub-Heading {r['subheading_code']} — {r.get('subheading_desc', '')}")
+        if hierarchy_parts:
+            lines.append("Hierarchy: " + " > ".join(hierarchy_parts))
+
+        lines.append(f"HS Code: {r.get('code', 'N/A')} — {r.get('description', '')}")
+
         if r.get("full_label"):
-            lines.append(f"Full Hierarchy           : {r['full_label']}")
-        if r.get("score") is not None:
-            lines.append(f"Vector Similarity        : {r['score']:.4f}")
+            lines.append(f"Full Label: {r['full_label']}")
 
         tariffs = [t for t in (r.get("tariffs") or []) if t.get("type")]
         if tariffs:
@@ -311,7 +342,7 @@ def _format_pk_results(records: list[dict]) -> str:
 
         cess = [c for c in (r.get("cess") or []) if c.get("province")]
         if cess:
-            lines.append(f"Cess (first {min(5, len(cess))} provinces):")
+            lines.append(f"Cess ({min(5, len(cess))} provinces shown):")
             for c in cess[:5]:
                 lines.append(
                     f"  • {c['province']} — "
@@ -407,20 +438,91 @@ def _pk_code_lookup(code: str) -> list[dict]:
         return session.run(_PK_CODE_CYPHER, code=code).data()
 
 
-def _pk_vector_search(query: str, top_k: int = _VECTOR_TOP_K) -> list[dict]:
-    """Vector similarity search restricted to :PK labelled nodes.
+_PK_TEXT_CYPHER = """
+MATCH (hs:HSCode:PK)
+WHERE hs.description IS NOT NULL
+  AND (toLower(hs.description) CONTAINS toLower($keyword)
+       OR (hs.full_label IS NOT NULL AND toLower(hs.full_label) CONTAINS toLower($keyword)))
+WITH hs,
+     CASE WHEN toLower(hs.description) STARTS WITH toLower($keyword) THEN 0
+          WHEN toLower(hs.description) CONTAINS toLower($keyword) THEN 1
+          ELSE 2 END AS relevance
+ORDER BY relevance ASC
+LIMIT $top_k
+OPTIONAL MATCH (sh:SubHeading:PK)-[:HAS_HSCODE]->(hs)
+OPTIONAL MATCH (hd:Heading:PK)-[:HAS_SUBHEADING]->(sh)
+OPTIONAL MATCH (sc:SubChapter:PK)-[:HAS_HEADING]->(hd)
+OPTIONAL MATCH (ch:Chapter:PK)-[:HAS_SUBCHAPTER]->(sc)
+OPTIONAL MATCH (hs)-[:HAS_TARIFF]->(t:Tariff)
+OPTIONAL MATCH (hs)-[:HAS_CESS]->(c:Cess)
+OPTIONAL MATCH (hs)-[:HAS_EXEMPTION]->(ex:Exemption)
+OPTIONAL MATCH (hs)-[:REQUIRES_PROCEDURE]->(pr:Procedure)
+RETURN
+    hs.code        AS code,
+    hs.description AS description,
+    hs.full_label  AS full_label,
+    relevance      AS score,
+    ch.code            AS chapter_code,
+    ch.description     AS chapter_desc,
+    sc.code            AS subchapter_code,
+    sc.description     AS subchapter_desc,
+    hd.code            AS heading_code,
+    hd.description     AS heading_desc,
+    sh.code            AS subheading_code,
+    sh.description     AS subheading_desc,
+    collect(DISTINCT {type: t.duty_type,   name: t.duty_name, rate: t.rate})  AS tariffs,
+    collect(DISTINCT {province: c.province, import_rate: c.import_rate,
+                      export_rate: c.export_rate})                             AS cess,
+    collect(DISTINCT {description: ex.exemption_desc, rate: ex.rate})         AS exemptions,
+    collect(DISTINCT {name: pr.name, category: pr.category})                  AS procedures
+"""
 
-    Fetches _VECTOR_FETCH_K nodes from the shared index (wide net), then the
-    WHERE 'PK' IN labels(hs) filter + LIMIT $top_k trims to the best PK hits.
-    """
+_US_TEXT_CYPHER = """
+MATCH (hs:HSCode:US)
+WHERE hs.description IS NOT NULL
+  AND (toLower(hs.description) CONTAINS toLower($keyword)
+       OR (hs.full_path_description IS NOT NULL AND toLower(hs.full_path_description) CONTAINS toLower($keyword)))
+WITH hs,
+     CASE WHEN toLower(hs.description) STARTS WITH toLower($keyword) THEN 0
+          WHEN toLower(hs.description) CONTAINS toLower($keyword) THEN 1
+          ELSE 2 END AS relevance
+ORDER BY relevance ASC, hs.hts_code ASC
+LIMIT $top_k
+OPTIONAL MATCH (parent:HSCode:US)-[:HAS_CHILD]->(hs)
+RETURN
+    hs.hts_code              AS hts_code,
+    hs.description           AS description,
+    hs.full_path_description AS full_path,
+    hs.indent                AS indent,
+    hs.general_rate          AS general_rate,
+    hs.special_rate          AS special_rate,
+    hs.column_2_rate         AS column_2_rate,
+    hs.unit                  AS unit,
+    relevance                AS score,
+    parent.hts_code          AS parent_code,
+    parent.description       AS parent_description,
+    []                       AS children
+"""
+
+
+def _pk_vector_search(query: str, top_k: int = _VECTOR_TOP_K) -> list[dict]:
+    """Vector similarity search for :PK nodes. Falls back to text search if MAGE unavailable."""
     vector = _get_embeddings().embed_query(query)
-    with _read_session() as session:
-        return session.run(
-            _PK_VECTOR_CYPHER,
-            fetch_k=_VECTOR_FETCH_K,
-            top_k=top_k,
-            query_vector=vector,
-        ).data()
+    try:
+        with _read_session() as session:
+            return session.run(
+                _PK_VECTOR_CYPHER,
+                fetch_k=_VECTOR_FETCH_K,
+                top_k=top_k,
+                query_vector=vector,
+            ).data()
+    except Exception as exc:
+        if "no procedure" in str(exc).lower() or "vector_search" in str(exc).lower():
+            logger.warning("[NEO4J → PK] vector_search.search unavailable — falling back to text search. Install memgraph-mage for semantic search.")
+            keyword = query.strip()
+            with _read_session() as session:
+                return session.run(_PK_TEXT_CYPHER, keyword=keyword, top_k=top_k).data()
+        raise
 
 
 def _us_code_lookup(code: str) -> list[dict]:
@@ -430,18 +532,23 @@ def _us_code_lookup(code: str) -> list[dict]:
 
 
 def _us_vector_search(query: str, top_k: int = _VECTOR_TOP_K) -> list[dict]:
-    """Vector similarity search restricted to :US labelled nodes.
-
-    Same wide-net strategy as _pk_vector_search.
-    """
+    """Vector similarity search for :US nodes. Falls back to text search if MAGE unavailable."""
     vector = _get_embeddings().embed_query(query)
-    with _read_session() as session:
-        return session.run(
-            _US_VECTOR_CYPHER,
-            fetch_k=_VECTOR_FETCH_K,
-            top_k=top_k,
-            query_vector=vector,
-        ).data()
+    try:
+        with _read_session() as session:
+            return session.run(
+                _US_VECTOR_CYPHER,
+                fetch_k=_VECTOR_FETCH_K,
+                top_k=top_k,
+                query_vector=vector,
+            ).data()
+    except Exception as exc:
+        if "no procedure" in str(exc).lower() or "vector_search" in str(exc).lower():
+            logger.warning("[NEO4J → US] vector_search.search unavailable — falling back to text search. Install memgraph-mage for semantic search.")
+            keyword = query.strip()
+            with _read_session() as session:
+                return session.run(_US_TEXT_CYPHER, keyword=keyword, top_k=top_k).data()
+        raise
 
 
 # ── tool input schemas ────────────────────────────────────────────────────────
@@ -776,117 +883,166 @@ Harmonized System (HS) codes, import/export regulations, and tariff schedules.
 
 You have access to four tools:
 
-  1. search_pakistan_hs_data  [Neo4j — Graph DB]
-     → Pakistan PCT (Pakistan Customs Tariff) database (:PK schema)
-     → Star schema: HS codes connected to Tariff, Cess, Exemption,
-       Procedure, and Measure nodes
-     → Use for: CD/RD/ACD/FED/ST rates, provincial cess, SRO exemptions,
-       customs procedures, NTMs
+  1. search_pakistan_hs_data  [Graph DB — Pakistan PCT]
+     → Pakistan Customs Tariff database: HS codes, tariff rates (CD/RD/ACD/FED/ST/IT),
+       provincial cess, SRO exemptions, customs procedures, NTMs/measures.
 
-  2. search_us_hs_data  [Neo4j — Graph DB]
-     → US Harmonized Tariff Schedule database (:US schema)
-     → 11-level implicit hierarchy via HAS_CHILD relationships
-     → Rates stored as properties: general_rate, special_rate, column_2_rate
-     → Use for: US import duties, HTS classifications, US trade data
+  2. search_us_hs_data  [Graph DB — US HTS]
+     → US Harmonized Tariff Schedule: HTS codes, duty rates (general/special/column-2),
+       unit of quantity, hierarchical parent/child structure.
 
-  3. search_trade_documents  [Pinecone — Vector DB]
-     → Uploaded trade policy documents, regulations, and reports
-     → Use for: policy context, trade agreements, SRO documents,
-       compliance guidelines, any question needing document-level context
-     → Call this alongside the Neo4j tools for richer answers
+  3. search_trade_documents  [Vector DB — Policy Docs]
+     → Trade policy documents, FTAs, SRO texts, WTO regulations, compliance guidelines.
 
   4. evaluate_shipping_routes  [Route Engine]
-     → Evaluates all viable Pakistan → USA shipping routes
-     → Returns cost breakdown, transit times, carrier options, live freight rates
-     → Use for: shipping route questions, freight cost estimates, logistics planning
-     → When this tool is called, an interactive route widget is shown to the user
+     → Pakistan → USA shipping routes with full cost breakdown, transit times, carriers.
+     → Renders an interactive widget to the user automatically.
 
-Rules you MUST follow
-──────────────────────
-• ALWAYS call at least one tool for EVERY user question — no exceptions.
-  Never answer any trade question from training knowledge alone.
-• For ANY question about products, commodities, or goods:
-    - Call search_pakistan_hs_data to find PK tariff/HS data
-    - Call search_us_hs_data to find US HTS data
-    - Call search_trade_documents to find relevant policy documents
-• For tariff/duty/rate questions: call search_pakistan_hs_data and/or
-  search_us_hs_data depending on the country mentioned.
-• For policy, regulation, SRO, or document questions: call search_trade_documents.
-• For general "what is X" or "tell me about X" trade questions: call
-  search_trade_documents AND the relevant Neo4j tools.
-• For cross-country comparisons: call BOTH Neo4j tools.
-• For shipping route, freight cost, logistics, or transit time questions:
-  call evaluate_shipping_routes. An interactive widget will be rendered for the user.
-• ONLY cite HS codes and duty rates that appear verbatim in tool results.
-  Never invent, estimate, interpolate, or recall rates from training data.
-• If all tools return no data, say so clearly and suggest a more specific query.
-• Label every rate you quote with its source country and duty type.
-• Use bullet points or tables when listing multiple rates — clarity matters.
+═══════════════════════════════════════════════════════
+TOOL CALLING RULES
+═══════════════════════════════════════════════════════
+• ALWAYS call at least one tool — never answer trade questions from memory alone.
+• Product / commodity query (no country specified) → call BOTH search_pakistan_hs_data AND search_us_hs_data.
+• "Pakistan only" query → call search_pakistan_hs_data only.
+• "US only" query → call search_us_hs_data only.
+• Policy / SRO / regulation → call search_trade_documents (alongside Neo4j tools if rates also needed).
+• Shipping / freight / logistics → call evaluate_shipping_routes.
+• Cross-country comparison → call BOTH Neo4j tools.
+• ONLY cite codes and rates that appear verbatim in tool results. Never invent or estimate.
+
+═══════════════════════════════════════════════════════
+COMPLETENESS RULE — MOST IMPORTANT FOR HS CODE QUERIES
+═══════════════════════════════════════════════════════
+The tool returns MULTIPLE records. You MUST list EVERY record returned.
+Do NOT pick just one result — show them ALL.
+
+When the user asks for HS codes / classifications:
+  • List every single code the tool returned.
+  • Group under country headings: ## Pakistan HS Codes (PCT) and ## US HTS Codes
+  • Do NOT use tables. Use bullet points in plain prose.
+  • If a product has sub-varieties (e.g. fresh, dried, frozen, pulp, juice), list ALL of them.
+  • If tool returns 0 results, say so clearly.
+
+═══════════════════════════════════════════════════════
+HOW TO INTERPRET USER INTENT
+═══════════════════════════════════════════════════════
+Before responding, resolve what the user wants in TWO steps:
+
+  STEP 1 — What PRODUCT/SUBJECT? (e.g. mangoes, horses, guns, rice)
+  STEP 2 — What DATA TYPE? (codes, tariffs, cess, exemptions, procedures, measures, full details)
+
+The DATA TYPE determines what you output. The PRODUCT is the search filter.
+
+Data type keywords and their meanings:
+  • "HS code" / "code" / "classify" / "classification"  → DATA TYPE = CODES
+  • "tariff" / "tariffs" / "duty" / "duties" / "tax" / "taxes" / "rate" / "rates" / "how much" → DATA TYPE = RATES
+    NOTE: In the US database, tariff rates are stored as: general_rate (MFN/standard rate),
+    special_rate (preferential/GSP/FTA rate), column_2_rate (punitive rate for non-MFN countries).
+    All three are "tariffs" in the US context. Show whichever are present.
+  • "cess"  → DATA TYPE = CESS
+  • "exemption" / "concession" / "SRO"  → DATA TYPE = EXEMPTIONS
+  • "procedure" / "procedures"  → DATA TYPE = PROCEDURES
+  • "measure" / "measures" / "NTM"  → DATA TYPE = MEASURES
+  • "full details" / "everything" / "complete"  → DATA TYPE = ALL
+
+If the query does NOT specify a data type (e.g. just "mangoes in Pakistan" or "tell me about horses"),
+default to DATA TYPE = CODES + RATES.
+
+═══════════════════════════════════════════════════════
+STRICT OUTPUT RULES BY DATA TYPE
+═══════════════════════════════════════════════════════
+
+──────────────────────────────────────────────────────
+DATA TYPE = CODES
+──────────────────────────────────────────────────────
+Show ALL relevant codes grouped by country. NO tables — use bullet points only.
+
+  ## Pakistan HS Codes (PCT)
+  For each Pakistan result, show the hierarchy levels available then the HS code:
+    • Chapter XX — [description]
+      Sub-Chapter XX — [description]  (if present)
+      Heading XXXX — [description]  (if present)
+      Sub-Heading XXXXXX — [description]  (if present)
+      HS Code: XXXXXXXXXXXX — [description]
+
+  ## US HTS Codes
+  For each US result, show a simple bullet:
+    • XXXX.XX.XX — [description]
+
+Relevance rule: Only include codes whose PRIMARY subject matches the user's product.
+  • "horses" → include Chapter 01 live horse codes. EXCLUDE meat/offal codes (0205, 0206)
+    unless user said "meat" or "slaughter".
+  • "guns" → include firearms (Chapter 93). EXCLUDE caulking guns, spray guns, soldering guns.
+  • "mangoes" → include fresh, dried, processed mango codes. Include parent chapter codes.
+Show ALL hierarchy levels. OMIT rates, cess, exemptions.
+
+──────────────────────────────────────────────────────
+DATA TYPE = RATES  (tariff / duty / tax)
+──────────────────────────────────────────────────────
+For Pakistan — use bullet points, nothing else:
+  • Customs Duty (CD): x%
+  • Regulatory Duty (RD): x%
+  • Additional Customs Duty (ACD): x%
+  • Federal Excise Duty (FED): x%
+  • Sales Tax / VAT (ST): x%
+  • Income Tax (IT): x%
+  • Development Surcharge (DS): x%
+
+For US — use bullet points, nothing else:
+  • General Rate of Duty (MFN): x%
+  • Special Rate (GSP/FTA): x%  (if present)
+  • Column 2 Rate: x%  (if present)
+
+HARD STOP after the bullets. No cess. No exemptions. No codes. No other section.
+
+──────────────────────────────────────────────────────
+DATA TYPE = CESS
+──────────────────────────────────────────────────────
+Show ONLY provincial cess as bullet points. Nothing else. Hard stop.
+  • Province — Import: x%, Export: x%
+
+──────────────────────────────────────────────────────
+DATA TYPE = EXEMPTIONS
+──────────────────────────────────────────────────────
+Show ONLY exemptions/concessions as bullet points. Nothing else. Hard stop.
+
+──────────────────────────────────────────────────────
+DATA TYPE = PROCEDURES
+──────────────────────────────────────────────────────
+Show ONLY required trade procedures as bullet points. Nothing else. Hard stop.
+
+──────────────────────────────────────────────────────
+DATA TYPE = MEASURES
+──────────────────────────────────────────────────────
+Show ONLY trade measures/NTMs as bullet points. Nothing else. Hard stop.
+
+──────────────────────────────────────────────────────
+DATA TYPE = ALL
+──────────────────────────────────────────────────────
+Show all fields: codes, tariffs, cess, exemptions, procedures, measures.
+
+──────────────────────────────────────────────────────
+TWO DATA TYPES NAMED (e.g. "HS code and tariff")
+──────────────────────────────────────────────────────
+Show only those two fields. Nothing else. Hard stop.
 
 When evaluate_shipping_routes is called
 ────────────────────────────────────────
-• Give a brief conversational summary (2–4 sentences): mention the recommended
-  route, cheapest cost range, and fastest transit time.
-• Do NOT repeat every route's numbers — the user sees an interactive widget.
-• End with one sentence like: "The full breakdown with all routes is shown in the
-  widget below."
+• 2–4 sentence summary: best route, cost range, fastest transit.
+• Do NOT repeat every route's numbers — widget shows all details.
+• End with: "The full breakdown is shown in the widget below."
 
-RESPONSE FILTERING — THIS IS THE MOST IMPORTANT RULE
-══════════════════════════════════════════════════════
-Tool results contain many fields. You MUST act as a strict filter.
-Output ONLY the fields the user explicitly asked for. Omit everything else.
-Treat this as an absolute rule — there are no exceptions.
-
-Identify what the user asked for, then apply exactly one of the rules below:
-
-  ► User asks for "HS code" / "classification" / "code" only
-      OUTPUT  : HS code + description only. ALWAYS label each code with its country.
-      FORMAT  : Group results under two clear headings:
-                  "Pakistan HS Codes (PCT)" — for codes from search_pakistan_hs_data
-                  "US HTS Codes"            — for codes from search_us_hs_data
-                If only one country returned data, still use that country's heading.
-                NEVER mix codes from different countries in the same list without headings.
-      OMIT    : tariffs, cess, exemptions, procedures, measures, rates — everything else.
-
-  ► User asks for "tariff" / "duty" / "rate" / "tax" only
-      OUTPUT  : duty rates only (CD, RD, ACD, FED, ST, IT, etc.).
-      OMIT    : cess, exemptions, procedures, measures, HS code description detail.
-
-  ► User asks for "cess" only
-      OUTPUT  : cess rates by province only.
-      OMIT    : tariffs, exemptions, procedures, measures, HS code description detail.
-
-  ► User asks for "exemption" / "concession" / "SRO" only
-      OUTPUT  : exemptions list only.
-      OMIT    : tariffs, cess, procedures, measures, HS code description detail.
-
-  ► User asks for "procedure" / "procedures" only
-      OUTPUT  : required trade procedures only.
-      OMIT    : tariffs, cess, exemptions, measures, HS code description detail.
-
-  ► User asks for "measure" / "measures" / "NTM" only
-      OUTPUT  : trade measures only.
-      OMIT    : tariffs, cess, exemptions, procedures, HS code description detail.
-
-  ► User asks for "procedures and measures" / "measures and procedures"
-      OUTPUT  : procedures + measures only.
-      OMIT    : tariffs, cess, exemptions, HS code description detail — everything else.
-
-  ► User asks for "full details" / "everything" / "complete breakdown"
-      OUTPUT  : all fields.
-
-  ► User asks for two or more specific fields (e.g. "HS code and tariff")
-      OUTPUT  : only those exact fields.
-      OMIT    : all other fields not mentioned.
-
-Critical prohibitions — NEVER do these:
-  ✗ NEVER volunteer tariff rates when the user only asked for procedures/measures.
-  ✗ NEVER volunteer cess when the user did not ask for cess.
-  ✗ NEVER volunteer exemptions when the user did not ask for exemptions.
-  ✗ NEVER add a "Summary" section at the end.
-  ✗ NEVER add closing phrases like "If you need further details, feel free to ask!"
-  ✗ NEVER repeat information already stated.
-  ✗ Be concise. A short accurate answer is always better than a long one.
+═══════════════════════════════════════════════════════
+ABSOLUTE PROHIBITIONS
+═══════════════════════════════════════════════════════
+✗ NEVER show cess when user asked for taxes/tariffs/duties.
+✗ NEVER show exemptions when user asked for taxes/tariffs/duties.
+✗ NEVER show HS codes when user asked for tariffs/duties (they already know the product).
+✗ NEVER include codes whose primary subject does not match the user's product.
+✗ NEVER show only one code when multiple relevant ones were returned — list them ALL.
+✗ NEVER add a Summary section or closing phrases like "Feel free to ask!".
+✗ NEVER repeat information already stated.
+✗ NEVER invent HS codes, rates, or data not present in tool results.
 """)
 
 # ── LLM singleton ─────────────────────────────────────────────────────────────
@@ -936,13 +1092,17 @@ STEP 1 — Shipping
 STEP 2 — HS Codes / Tariffs / Duties / Classifications / Products
   These queries need Neo4j tools. Apply ONE of these sub-rules:
 
-  A. User says "Pakistan only" OR uses words like "Pakistani customs", "PCT", "in Pakistan":
-       AND does NOT mention US/America/United States
+  A. User says "Pakistan only" OR uses ANY of these signals: "in Pakistan", "Pakistani",
+       "PCT", "Pakistan customs", "Pakistan tariff", "Pakistan duty", "Pakistan taxes":
+       AND does NOT mention US/America/United States/HTS
        → include ONLY "search_pakistan_hs_data"
+       This applies even for "taxes", "duties", "rates", "codes" — the country qualifier wins.
 
-  B. User says "US only" OR uses words like "HTS", "in the US", "American tariff", "United States":
-       AND does NOT mention Pakistan
+  B. User says "US only" OR uses ANY of these signals: "in the US", "in the United States",
+       "American", "US tariff", "US duty", "US taxes", "US hs code", "HTS":
+       AND does NOT mention Pakistan/PCT/Pakistani
        → include ONLY "search_us_hs_data"
+       This applies even for "taxes", "duties", "rates", "codes" — the country qualifier wins.
 
   C. Everything else — no country mentioned, OR both countries mentioned, OR generic product query:
        → include BOTH "search_pakistan_hs_data" AND "search_us_hs_data"
@@ -973,6 +1133,12 @@ Examples (follow these exactly):
   "pakistan customs duty on cars"                         → ["search_pakistan_hs_data"]
   "US tariff on cotton"                                   → ["search_us_hs_data"]
   "HTS code for live horses"                              → ["search_us_hs_data"]
+  "taxes on horses in the US"                             → ["search_us_hs_data"]
+  "duty on mangoes in the US"                             → ["search_us_hs_data"]
+  "hs code for rice in the US"                            → ["search_us_hs_data"]
+  "what are the taxes on steel in the United States"      → ["search_us_hs_data"]
+  "taxes on horses in Pakistan"                           → ["search_pakistan_hs_data"]
+  "duty on mangoes in Pakistan"                           → ["search_pakistan_hs_data"]
   "compare pakistan and us duties on steel"               → ["search_pakistan_hs_data", "search_us_hs_data"]
   "procedures and measures for mangoes"                   → ["search_pakistan_hs_data"]
   "exemptions for textile imports in pakistan"            → ["search_pakistan_hs_data"]

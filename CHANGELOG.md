@@ -1,5 +1,19 @@
 # CHANGELOG
 
+
+### v6.2.0 - 04/19/2026
+
+#### Added
+
+- Memgraph db is added.
+- Enhanced the ingestions scripts and added checkpointer functions.
+
+#### Changed
+
+- Refined the system prompts.
+- Shifted from neo4j to memgraph 
+- Rerun the ingestion scripts
+
 ### v6.0.1 - 04/19/2026
 
 #### Added

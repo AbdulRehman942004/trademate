@@ -44,12 +44,11 @@ def _get_driver():
         user = os.getenv("NEO4J_USERNAME")
         password = os.getenv("NEO4J_PASSWORD")
 
-        if not all([uri, user, password]):
-            raise EnvironmentError(
-                "NEO4J_URI, NEO4J_USERNAME and NEO4J_PASSWORD must be set in .env"
-            )
+        if not uri:
+            raise EnvironmentError("NEO4J_URI must be set in .env")
 
-        _driver = GraphDatabase.driver(uri, auth=(user, password))
+        auth = (user, password) if user and password else None
+        _driver = GraphDatabase.driver(uri, auth=auth)
         _driver.verify_connectivity()
         logger.info("Neo4j driver initialised → %s", uri)
 
@@ -76,40 +75,40 @@ def _get_embeddings():
 
 # ── vector index setup ────────────────────────────────────────────────────────
 
-_INDEX_NAME = "hscode_embedding_index"
+_INDEX_NAME = "HSCode_embedding"
 _EMBEDDING_DIMS = 1536  # text-embedding-3-small
 
 
 def ensure_vector_index() -> None:
     """
-    Idempotently create a Neo4j vector index on HSCode.embedding.
-    Safe to call multiple times — uses IF NOT EXISTS.
+    Idempotently create a Memgraph vector index on HSCode.embedding.
     """
     try:
         driver = _get_driver()
         with driver.session() as session:
             session.run(
                 f"""
-                CREATE VECTOR INDEX {_INDEX_NAME} IF NOT EXISTS
-                FOR (h:HSCode) ON (h.embedding)
-                OPTIONS {{
-                    indexConfig: {{
-                        `vector.dimensions`: {_EMBEDDING_DIMS},
-                        `vector.similarity_function`: 'cosine'
-                    }}
+                CREATE VECTOR INDEX ON :HSCode(embedding)
+                WITH CONFIG {{
+                    "dimension": {_EMBEDDING_DIMS},
+                    "capacity": 500000,
+                    "metric": "cos"
                 }}
                 """
             )
-        logger.info("Vector index '%s' verified / created.", _INDEX_NAME)
+        logger.info("Vector index '%s' created.", _INDEX_NAME)
     except Exception as exc:
-        logger.warning("Could not create vector index: %s", exc)
+        if "already exists" in str(exc).lower() or "exist" in str(exc).lower():
+            logger.info("Vector index '%s' already exists — skipping.", _INDEX_NAME)
+        else:
+            logger.warning("Could not create vector index: %s", exc)
 
 
 # ── retrieval ─────────────────────────────────────────────────────────────────
 
 _RETRIEVE_CYPHER = f"""
-CALL db.index.vector.queryNodes('{_INDEX_NAME}', $top_k, $query_vector)
-YIELD node AS hs, score
+CALL vector_search.search('{_INDEX_NAME}', $top_k, $query_vector)
+YIELD node AS hs, similarity AS score
 
 // Determine whether this is a PK or US node
 WITH hs, score,
