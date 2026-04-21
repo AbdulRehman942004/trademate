@@ -1,6 +1,10 @@
 # CHANGELOG
 
+### v6.3.0
+#### Added 
 
+
+- Added user feedback and also updated a column in pgadmin4
 
 
 ### v6.2.1

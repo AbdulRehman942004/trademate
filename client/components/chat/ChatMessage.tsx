@@ -1,11 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { Copy, Check, ThumbsUp, ThumbsDown, RotateCcw } from "lucide-react";
+import { Copy, Check, RotateCcw } from "lucide-react";
 import dynamic from "next/dynamic";
 import type { Message } from "@/types";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { StarRating } from "./StarRating";
 import { IconButton } from "@/components/ui/IconButton";
+import { useChatStore } from "@/stores/chatStore";
+import MessageService from "@/services/message.service";
 import { cn } from "@/lib/cn";
 
 // Leaflet accesses window/document at import time — must be client-only
@@ -22,11 +25,26 @@ interface ChatMessageProps {
 export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
   const [copied, setCopied] = useState(false);
   const isAssistant = message.role === "assistant";
+  const activeConversationId = useChatStore((s) => s.activeConversationId);
+  const setMessageRating = useChatStore((s) => s.setMessageRating);
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(message.content);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleRate = async (rating: number) => {
+    if (!message.dbId || !activeConversationId) return;
+    // Optimistic update, rolled back on failure
+    const previous = message.rating ?? null;
+    setMessageRating(activeConversationId, message.dbId, rating);
+    try {
+      await MessageService.rateMessage(message.dbId, rating);
+    } catch (err) {
+      setMessageRating(activeConversationId, message.dbId, previous ?? 0);
+      throw err;
+    }
   };
 
   if (message.role === "user") {
@@ -77,19 +95,30 @@ export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
 
         {/* Action bar — visible on hover when not streaming */}
         {!isStreaming && message.content && (
-          <div className="flex items-center gap-0.5 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div
+            className={cn(
+              "flex items-center gap-2 mt-2 transition-opacity",
+              // Keep a submitted rating visible; otherwise only show on hover.
+              message.rating
+                ? "opacity-100"
+                : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
+            )}
+          >
             <IconButton label="Copy" size="sm" onClick={handleCopy}>
               {copied ? <Check size={13} /> : <Copy size={13} />}
-            </IconButton>
-            <IconButton label="Thumbs up" size="sm">
-              <ThumbsUp size={13} />
-            </IconButton>
-            <IconButton label="Thumbs down" size="sm">
-              <ThumbsDown size={13} />
             </IconButton>
             <IconButton label="Regenerate" size="sm">
               <RotateCcw size={13} />
             </IconButton>
+            {isAssistant && (
+              <div className="ml-1 pl-2 border-l border-zinc-200 dark:border-zinc-700">
+                <StarRating
+                  value={message.rating ?? null}
+                  onSubmit={handleRate}
+                  disabled={!message.dbId}
+                />
+              </div>
+            )}
           </div>
         )}
       </div>

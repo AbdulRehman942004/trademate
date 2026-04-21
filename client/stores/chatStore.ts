@@ -18,6 +18,8 @@ interface ChatState {
   addMessage: (conversationId: string, message: Omit<Message, "id" | "createdAt">) => string;
   updateLastAssistantMessage: (conversationId: string, content: string) => void;
   attachWidgetToLastMessage: (conversationId: string, widget: MessageWidget) => void;
+  setLastAssistantMessageDbId: (conversationId: string, dbId: number) => void;
+  setMessageRating: (conversationId: string, dbId: number, rating: number) => void;
   setStreaming: (value: boolean) => void;
   setSelectedModel: (modelId: string) => void;
   getActiveConversation: () => Conversation | undefined;
@@ -121,6 +123,34 @@ export const useChatStore = create<ChatState>()(
               messages[lastIdx] = { ...messages[lastIdx], widgets: [...existing, widget] };
             }
             return { ...conv, messages };
+          }),
+        }));
+      },
+
+      setLastAssistantMessageDbId: (conversationId, dbId) => {
+        set((state) => ({
+          conversations: state.conversations.map((conv) => {
+            if (conv.id !== conversationId) return conv;
+            const messages = [...conv.messages];
+            const lastIdx = messages.length - 1;
+            if (lastIdx >= 0 && messages[lastIdx].role === "assistant") {
+              messages[lastIdx] = { ...messages[lastIdx], dbId };
+            }
+            return { ...conv, messages };
+          }),
+        }));
+      },
+
+      setMessageRating: (conversationId, dbId, rating) => {
+        set((state) => ({
+          conversations: state.conversations.map((conv) => {
+            if (conv.id !== conversationId) return conv;
+            return {
+              ...conv,
+              messages: conv.messages.map((m) =>
+                m.dbId === dbId ? { ...m, rating } : m
+              ),
+            };
           }),
         }));
       },

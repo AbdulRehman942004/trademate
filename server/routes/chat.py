@@ -28,6 +28,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field as PydField
 from sqlmodel import Session, select
 
 from agent.bot import get_bot, route_widget_ctx
@@ -121,8 +122,8 @@ def _save_message(
     content: str,
     tools_used: list[str] | None = None,
     sources_hit: list[str] | None = None,
-) -> None:
-    """Persist a single message to the DB."""
+) -> int:
+    """Persist a single message to the DB and return its generated id."""
     msg = Message(
         conversation_id=conversation_id,
         role=role,
@@ -140,6 +141,8 @@ def _save_message(
         session.add(conv)
 
     session.commit()
+    session.refresh(msg)
+    return msg.id
 
 
 # ── SSE helper ─────────────────────────────────────────────────────────────────
@@ -241,9 +244,10 @@ async def _stream_agent(
 
         # Persist the full assistant reply
         full_reply = "".join(reply_chunks)
+        assistant_message_id: int | None = None
         if full_reply:
             with Session(engine) as session:
-                _save_message(
+                assistant_message_id = _save_message(
                     session,
                     conversation_id,
                     "assistant",
@@ -258,6 +262,15 @@ async def _stream_agent(
             logger.warning(
                 "━━━ [DONE]    ⚠ No tools called — LLM answered from training knowledge only."
             )
+
+        # Tell the client the DB id of the assistant message so it can wire up
+        # rating submission (PATCH /v1/messages/{id}/rating).
+        if assistant_message_id is not None:
+            yield _sse({
+                "type": "message_saved",
+                "message_id": assistant_message_id,
+                "conversation_id": conversation_id,
+            })
 
         yield _sse({"type": "done", "conversation_id": conversation_id})
 
@@ -296,6 +309,51 @@ async def _stream_agent(
 
 
 # ── route ──────────────────────────────────────────────────────────────────────
+
+
+class RatingRequest(BaseModel):
+    rating: int = PydField(ge=1, le=5, description="Star rating from 1 (worst) to 5 (best).")
+
+
+class RatingResponse(BaseModel):
+    message_id: int
+    rating: int
+
+
+@router.patch("/messages/{message_id}/rating", response_model=RatingResponse)
+def rate_message(
+    message_id: int,
+    body: RatingRequest,
+    user_id: int = Depends(_get_current_user_id),
+) -> RatingResponse:
+    """Submit or update a 1–5 star rating on an assistant message.
+
+    Only the conversation owner may rate, and only assistant messages are
+    ratable (user's own messages return 400).
+    """
+    with Session(engine) as session:
+        msg = session.get(Message, message_id)
+        if msg is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+
+        conv = session.get(Conversation, msg.conversation_id)
+        if conv is None or conv.user_id != user_id:
+            # Same response for both to avoid leaking message existence
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+        if msg.role != "assistant":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only assistant messages can be rated.",
+            )
+
+        msg.rating = body.rating
+        session.add(msg)
+        session.commit()
+        session.refresh(msg)
+
+    logger.info("[RATING] user_id=%d  message_id=%d  rating=%d", user_id, message_id, body.rating)
+    return RatingResponse(message_id=msg.id, rating=msg.rating)
 
 
 @router.post("/chat")

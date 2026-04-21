@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, Text
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Index, Integer, Text
 from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field, SQLModel
 
@@ -68,6 +68,10 @@ class Message(SQLModel, table=True):
     tools_used: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
     sources_hit: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
 
+    # User-submitted 1–5 star rating for assistant messages (null = unrated).
+    # Only assistant messages are rated; a CHECK constraint enforces the range.
+    rating: Optional[int] = Field(default=None, sa_column=Column(Integer, nullable=True))
+
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime, default=datetime.utcnow, nullable=False),
@@ -75,4 +79,5 @@ class Message(SQLModel, table=True):
 
     __table_args__ = (
         Index("ix_messages_conversation_id_created_at", "conversation_id", "created_at"),
+        CheckConstraint("rating IS NULL OR rating BETWEEN 1 AND 5", name="ck_messages_rating_range"),
     )

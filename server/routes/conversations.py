@@ -54,6 +54,7 @@ class MessageOut(BaseModel):
     role: str
     content: str
     tools_used: list[str] | None
+    rating: int | None
     created_at: str
 
 
@@ -113,6 +114,7 @@ def get_messages(
             role=r.role,
             content=r.content,
             tools_used=json.loads(r.tools_used) if r.tools_used else None,
+            rating=r.rating,
             created_at=r.created_at.isoformat(),
         )
         for r in rows

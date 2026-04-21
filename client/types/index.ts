@@ -13,6 +13,11 @@ export interface Message {
   content: string;
   createdAt: Date;
   widgets?: MessageWidget[];
+  // DB primary key, set once the backend has persisted the message. Rating
+  // submission requires this — the star UI stays disabled until it arrives.
+  dbId?: number;
+  // 1–5 star rating the user has submitted for an assistant message.
+  rating?: number | null;
 }
 
 export interface Conversation {

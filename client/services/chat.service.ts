@@ -9,12 +9,19 @@ import type { Message, MessageWidget } from "@/types";
 
 const BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL ?? "http://localhost:8000";
 
-export type SSETokenEvent  = { type: "token";  content: string; conversation_id: string };
-export type SSEDoneEvent   = { type: "done";   conversation_id: string };
-export type SSEErrorEvent  = { type: "error";  detail: string;  conversation_id: string };
-export type SSETitleEvent  = { type: "title";  title: string;   conversation_id: string };
-export type SSEWidgetEvent = { type: "widget"; widget_type: string; data: unknown; conversation_id: string };
-export type SSEEvent = SSETokenEvent | SSEDoneEvent | SSEErrorEvent | SSETitleEvent | SSEWidgetEvent;
+export type SSETokenEvent        = { type: "token";         content: string; conversation_id: string };
+export type SSEDoneEvent         = { type: "done";          conversation_id: string };
+export type SSEErrorEvent        = { type: "error";         detail: string;  conversation_id: string };
+export type SSETitleEvent        = { type: "title";         title: string;   conversation_id: string };
+export type SSEWidgetEvent       = { type: "widget";        widget_type: string; data: unknown; conversation_id: string };
+export type SSEMessageSavedEvent = { type: "message_saved"; message_id: number; conversation_id: string };
+export type SSEEvent =
+  | SSETokenEvent
+  | SSEDoneEvent
+  | SSEErrorEvent
+  | SSETitleEvent
+  | SSEWidgetEvent
+  | SSEMessageSavedEvent;
 
 /**
  * Stream a chat response from the backend.
@@ -32,6 +39,7 @@ export async function streamChat(
   onChunk: (accumulated: string) => void,
   onTitle?: (title: string) => void,
   onWidget?: (widget: MessageWidget) => void,
+  onMessageSaved?: (messageId: number) => void,
   signal?: AbortSignal
 ): Promise<void> {
   const token = typeof window !== "undefined"
@@ -100,6 +108,8 @@ export async function streamChat(
         onTitle?.(event.title);
       } else if (event.type === "widget" && event.widget_type === "route_evaluation") {
         onWidget?.({ type: "route_evaluation", data: event.data as MessageWidget["data"] });
+      } else if (event.type === "message_saved") {
+        onMessageSaved?.(event.message_id);
       } else if (event.type === "error") {
         throw new Error(event.detail);
       }
