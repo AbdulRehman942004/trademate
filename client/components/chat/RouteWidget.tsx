@@ -90,10 +90,14 @@ interface RouteStop {
 function getRouteStops(route: RouteResult, destinationCity: string): RouteStop[] {
   const normalizedDest = destinationCity.toLowerCase();
   const destPort = route.destination_ports.find(p => p.toLowerCase().includes(normalizedDest)) ?? route.destination_ports[0];
+  // Prefer the destination city name directly when we have coordinates for it.
+  // This fixes air routes where the port code (JFK) doesn't match the actual
+  // destination city (Miami, Baltimore, etc.) — we pin the real city instead.
+  const destName = ROUTE_COORDINATES[destinationCity] ? destinationCity : destPort;
   const raw: { name: string; type: StopType }[] = [
     { name: route.origin_port, type: "origin" },
     ...route.hubs.map(h => ({ name: h, type: "hub" as StopType })),
-    { name: destPort, type: "destination" },
+    { name: destName, type: "destination" },
   ];
   return raw
     .map(s => ({ ...s, coord: getLocationCoordinates(s.name) }))

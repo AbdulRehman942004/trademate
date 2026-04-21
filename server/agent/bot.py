@@ -477,15 +477,42 @@ RETURN
     collect(DISTINCT {name: pr.name, category: pr.category})                  AS procedures
 """
 
+# Primary text search — matches only in hs.description (not full_path).
+# This prevents spurious matches like 8308 matching "leather goods" because its
+# full_path says "of a kind used for ... leather goods".
 _US_TEXT_CYPHER = """
 MATCH (hs:HSCode:US)
 WHERE hs.description IS NOT NULL
-  AND (toLower(hs.description) CONTAINS toLower($keyword)
-       OR (hs.full_path_description IS NOT NULL AND toLower(hs.full_path_description) CONTAINS toLower($keyword)))
+  AND toLower(hs.description) CONTAINS toLower($keyword)
 WITH hs,
      CASE WHEN toLower(hs.description) STARTS WITH toLower($keyword) THEN 0
-          WHEN toLower(hs.description) CONTAINS toLower($keyword) THEN 1
-          ELSE 2 END AS relevance
+          ELSE 1 END AS relevance
+ORDER BY relevance ASC, hs.hts_code ASC
+LIMIT $top_k
+OPTIONAL MATCH (parent:HSCode:US)-[:HAS_CHILD]->(hs)
+RETURN
+    hs.hts_code              AS hts_code,
+    hs.description           AS description,
+    hs.full_path_description AS full_path,
+    hs.indent                AS indent,
+    hs.general_rate          AS general_rate,
+    hs.special_rate          AS special_rate,
+    hs.column_2_rate         AS column_2_rate,
+    hs.unit                  AS unit,
+    relevance                AS score,
+    parent.hts_code          AS parent_code,
+    parent.description       AS parent_description,
+    []                       AS children
+"""
+
+# Fallback — also searches full_path_description; used only when description-only search
+# returns nothing. Ranked lower (relevance=2) so that description matches always win.
+_US_TEXT_FULLPATH_CYPHER = """
+MATCH (hs:HSCode:US)
+WHERE hs.full_path_description IS NOT NULL
+  AND toLower(hs.full_path_description) CONTAINS toLower($keyword)
+  AND NOT toLower(hs.description) CONTAINS toLower($keyword)
+WITH hs, 2 AS relevance
 ORDER BY relevance ASC, hs.hts_code ASC
 LIMIT $top_k
 OPTIONAL MATCH (parent:HSCode:US)-[:HAS_CHILD]->(hs)
@@ -556,24 +583,51 @@ def _us_code_lookup(code: str) -> list[dict]:
 def _text_search_us(query: str, top_k: int = _VECTOR_TOP_K) -> list[dict]:
     """
     Text search fallback for US nodes when MAGE is unavailable.
-    Tries the full phrase first, then falls back to individual significant words
-    so that queries like "cotton yarn" still match "yarn of combed cotton".
-    """
-    _STOPWORDS = {"of", "in", "the", "and", "or", "for", "to", "a", "an", "on", "at", "by"}
 
+    Search order (most-specific to least):
+    1. Full phrase in description only  (e.g. "leather goods" won't match 8308)
+    2. Full phrase in full_path_description only
+    3. Each significant word in description only
+    4. Each significant word in full_path_description
+    """
+    _STOPWORDS = {"of", "in", "the", "and", "or", "for", "to", "a", "an", "on", "at", "by",
+                  "goods", "products", "items", "articles", "materials"}
+
+    kw = query.strip()
+
+    # Pass 1: full phrase in description
     with _read_session() as session:
-        records = session.run(_US_TEXT_CYPHER, keyword=query.strip(), top_k=top_k).data()
+        records = session.run(_US_TEXT_CYPHER, keyword=kw, top_k=top_k).data()
         if records:
             return records
 
-    # Full-phrase match failed — try each significant word individually, return first hit
-    words = [w for w in query.lower().split() if len(w) > 2 and w not in _STOPWORDS]
+    # Pass 2: full phrase in full_path_description
+    with _read_session() as session:
+        records = session.run(_US_TEXT_FULLPATH_CYPHER, keyword=kw, top_k=top_k).data()
+        if records:
+            logger.info("[NEO4J → US] Text fallback matched full phrase in full_path: %r", kw)
+            return records
+
+    # Pass 3: individual significant words in description only (longest/most specific first)
+    words = sorted(
+        [w for w in query.lower().split() if len(w) > 3 and w not in _STOPWORDS],
+        key=len, reverse=True,
+    )
     for word in words:
         with _read_session() as session:
             records = session.run(_US_TEXT_CYPHER, keyword=word, top_k=top_k).data()
             if records:
                 logger.info("[NEO4J → US] Text fallback matched on keyword %r", word)
                 return records
+
+    # Pass 4: individual significant words in full_path_description
+    for word in words:
+        with _read_session() as session:
+            records = session.run(_US_TEXT_FULLPATH_CYPHER, keyword=word, top_k=top_k).data()
+            if records:
+                logger.info("[NEO4J → US] Text fallback matched full_path keyword %r", word)
+                return records
+
     return []
 
 
@@ -654,7 +708,10 @@ class _USSearchInput(BaseModel):
             "Examples: 'mobile phones' → 'cellular telephones smartphones telephone sets', "
             "'cars' → 'passenger motor vehicles automobiles', "
             "'laptops' → 'portable automatic data processing machines', "
-            "'clothes' → 'garments apparel woven fabric'. "
+            "'clothes' → 'garments apparel woven fabric', "
+            "'leather goods/handbags/wallets/bags' → 'outer surface of leather' (returns HTS 4202.11 at 8% — NEVER use 'leather goods'), "
+            "'shoes' → 'footwear leather uppers chapter 64', "
+            "'furniture' → 'wooden furniture seats chapter 94'. "
             "You may also pass a US HTS code directly (e.g. '0101.21.00'). "
             "Do not include words like 'Pakistan' or 'PCT' here."
         )
@@ -887,7 +944,18 @@ class _RouteEvalInput(BaseModel):
     )
     hs_code: Optional[str] = Field(
         default=None,
-        description="HS code (first 2–6 digits) for import duty calculation, if known"
+        description=(
+            "HS/HTS code chapter (first 2 digits, e.g. '42') used to look up the US "
+            "import duty rate. YOU MUST PASS THIS — omitting it falls back to a generic "
+            "5% default which WILL be wrong for most products and produces a misleading "
+            "widget. If search_us_hs_data has already returned an HTS code this turn, "
+            "use the first 2 digits of that code (4202.11.00 → '42', 6109.10.00 → '61'). "
+            "If not, infer the chapter from the product: leather goods/bags/wallets → '42', "
+            "apparel/knit → '61', apparel/woven → '62', textiles/cotton → '52', "
+            "footwear → '64', rice → '10', mangoes/fruit → '08', steel articles → '73', "
+            "electronics → '85', vehicles → '87', furniture → '94', toys → '95'. "
+            "Only omit hs_code if the product is genuinely unknown."
+        )
     )
     cargo_volume_cbm: Optional[float] = Field(
         default=None,
@@ -896,6 +964,10 @@ class _RouteEvalInput(BaseModel):
     cargo_weight_kg: Optional[float] = Field(
         default=None,
         description="Cargo weight in kg — required for AIR shipments"
+    )
+    container_count: int = Field(
+        default=1,
+        description="Number of FCL containers (e.g. 2 for 'ship 2 containers'). Freight, THC, and drayage are multiplied by this value."
     )
     cost_weight: float = Field(
         default=0.5,
@@ -912,6 +984,7 @@ def evaluate_shipping_routes(
     hs_code: Optional[str] = None,
     cargo_volume_cbm: Optional[float] = None,
     cargo_weight_kg: Optional[float] = None,
+    container_count: int = 1,
     cost_weight: float = 0.5,
 ) -> str:
     """
@@ -929,6 +1002,10 @@ def evaluate_shipping_routes(
 
     DO NOT use this tool for HS code lookups, tariff rates, or trade policy questions —
     use the Neo4j tools for those.
+
+    CRITICAL: always pass hs_code (the 2-digit chapter). Without it the duty defaults
+    to 5% and the widget will display an inaccurate rate. See the hs_code field
+    description for the product→chapter mapping.
     """
     try:
         from schemas.routes import RouteEvaluationRequest
@@ -942,6 +1019,7 @@ def evaluate_shipping_routes(
             hs_code=hs_code or None,
             cargo_volume_cbm=cargo_volume_cbm,
             cargo_weight_kg=cargo_weight_kg,
+            container_count=max(1, int(container_count)),
             cost_weight=cost_weight,
         )
         result = evaluate_routes(req)
@@ -1029,11 +1107,53 @@ Answer DIRECTLY from your expertise (no tools) when:
 • "US only" query → call search_us_hs_data only.
 • Policy / SRO / regulation → call search_trade_documents (alongside Neo4j tools if rates also needed).
 • Shipping / freight / logistics → call evaluate_shipping_routes.
+• Air vs sea comparison request where weight IS provided → call evaluate_shipping_routes
+  TWICE in sequence: first with cargo_type="AIR" and cargo_weight_kg set, then again with
+  cargo_type="FCL_20" (or FCL_40 for 2+ containers). Both calls must happen — show both widgets.
+• Air vs sea comparison where weight is NOT provided → call for sea only, then ask for weight.
+• When the user mentions cargo weight in kg (e.g. "500 kg", "200 kg"), ALWAYS pass that
+  value as cargo_weight_kg when calling evaluate_shipping_routes with cargo_type="AIR".
+  Never omit cargo_weight_kg for air shipments — the tool will fail without it.
+• When the user specifies multiple containers (e.g. "2 containers", "3 FCL"), pass that
+  number as container_count. Freight costs scale per container.
+• evaluate_shipping_routes REQUIRES the hs_code argument (2-digit HS chapter). Never call it
+  without hs_code — omitting it uses a 5% default that is wrong for most products and will
+  be visibly incorrect in the widget header.
+    — If search_us_hs_data is also being called this turn for the same product, run it
+      FIRST (sequentially, not in parallel), then pass the first 2 digits of the returned
+      HTS code as hs_code (e.g. 4202.11.00 → "42", 6109.10.00 → "61").
+    — If the user has given a specific product but no HTS lookup is being performed,
+      infer the chapter directly from the product and pass it:
+        leather goods/bags/wallets/belts → "42"    apparel (knit) → "61"
+        apparel (woven) → "62"                     textiles/cotton/yarn → "52"
+        footwear → "64"                            rice/cereals → "10"
+        mangoes/fresh fruit → "08"                 steel articles → "73"
+        electronics/phones → "85"                  vehicles → "87"
+        furniture → "94"                           toys/sports → "95"
+    — Only omit hs_code when the product is truly unspecified (e.g. "general cargo").
+• Multi-destination comparison (e.g. "LA vs New York") → call evaluate_shipping_routes once
+  per destination. Do NOT reuse numbers from earlier in the conversation.
 • Cross-country comparison → call BOTH Neo4j tools.
 • ONLY cite HS codes and tariff rates that appear verbatim in tool results. Never invent or estimate.
+  If a tool result shows NO General Rate of Duty (the field is absent or empty), do NOT invent a rate.
+  Instead, note that the heading-level code has no single rate (rates vary by sub-item) and list
+  only the sub-items that DO have rates from the tool result.
 • When a tool returns NO_RESULTS: tell the user clearly that no matching record was found in the
   database for that product. Suggest they try a more specific name or the exact HS/HTS code.
   Do NOT fill the response with generic rate estimates or bullet-point placeholders.
+• When searching for broad product categories, always use the most specific product name in the
+  tool query to avoid wrong chapter matches:
+    "leather goods" / "leather articles" / "leather handbags/wallets/bags/belts" →
+      search "outer surface of leather" — this returns HTS 4202.11.00 (trunks/suitcases,
+      leather surface, 8% general rate) and 4202.21/4202.31 sub-items.
+      CRITICAL: NEVER search "leather goods" — HTS 8308 (base metal clasps) says
+      "used for leather goods" in its description and will always be returned wrongly.
+    "steel products"   → search "steel pipes tubes hollow profiles"
+    "electronic goods" → search specific item (e.g. "smartphones", "televisions")
+• Pakistan prohibits or heavily restricts commercial imports of alcohol (wine, spirits, beer).
+  If the database returns an HS code under Chapter 22 (beverages/alcohol), always add:
+  "Note: Pakistan restricts alcohol imports. These duty rates apply only under special
+  import permits and are not available for general commercial importation."
 • When using results from search_trade_documents: always cite the source document name
   (e.g. "According to [Document Name]...") so the user knows where the information came from.
 
@@ -1158,6 +1278,16 @@ When evaluate_shipping_routes is called
 • 2–4 sentence summary: best route, cost range, fastest transit.
 • Do NOT repeat every route's numbers — widget shows all details.
 • End with: "The full breakdown is shown in the widget below."
+• The widget's total_min and total_max ARE the complete total landed cost — they already
+  include every fee: inland haulage, freight, THC, customs broker, drayage, HMF, MPF,
+  and import duty. When asked for "total landed cost", report ONLY those two numbers.
+  Do NOT invent or add any extra "handling fees", "customs fees", or "port charges" on top.
+  Do NOT perform your own manual cost calculation — use the widget numbers directly.
+• When comparing two destinations (e.g. "LA vs New York"), call evaluate_shipping_routes
+  ONCE per destination — do not answer from memory or prior conversation context.
+• When the tool returns only AIR routes, do NOT invent or estimate sea freight figures.
+  If the user asked for air vs sea but only air routes were returned, state that sea route
+  data requires re-querying with a sea cargo type, or call the tool again for FCL.
 
 ═══════════════════════════════════════════════════════
 ABSOLUTE PROHIBITIONS
@@ -1170,6 +1300,19 @@ ABSOLUTE PROHIBITIONS
 ✗ NEVER add a Summary section or closing phrases like "Feel free to ask!".
 ✗ NEVER repeat information already stated.
 ✗ NEVER invent HS codes, rates, or data not present in tool results.
+✗ NEVER invent or estimate air freight costs, transit times, or carriers.
+  Air routes require cargo_type="AIR" AND cargo_weight_kg. If the user asks to compare
+  air vs sea but has NOT provided cargo weight, respond only with the sea route results
+  from the tool, then ask: "To calculate air freight costs, I need the cargo weight in kg."
+  Do NOT fabricate any air freight figures.
+✗ NEVER cite trade agreements or FTAs that are not confirmed in tool results.
+  Pakistan does NOT have a bilateral Free Trade Agreement with the United States.
+  Do not mention any "Pakistan-U.S. Trade Agreement" — it does not exist.
+  Pakistan exporters may benefit from unilateral US preference programs (e.g., GSP),
+  but only cite these if a tool result explicitly states it.
+✗ NEVER mention Pakistan-China FTA, SAFTA, or other regional agreements when the user is
+  asking about exporting TO the United States — those agreements govern trade with other
+  countries and are irrelevant to US import duties.
 """)
 
 # ── LLM singleton ─────────────────────────────────────────────────────────────
@@ -1212,18 +1355,30 @@ Tools:
 
 Follow this exact decision tree in order:
 
-STEP 0 — Conversational / General Knowledge (NO tools needed → return [])
-  Return [] if the query is ANY of these:
+STEP 0 — Trade Documents / Procedures (MUST check BEFORE general knowledge)
+  If the query asks about ANY of these, ALWAYS call search_trade_documents:
+  - Documents required for import or export ("what documents are required to export",
+    "what documents do I need to import", "export documentation requirements")
+  - Named trade schemes or programs ("DTRE scheme", "DTRE", "EDF scheme", "SRO",
+    "temporary import", "bonded warehouse", "export processing zone")
+  - Compliance procedures ("how to register as an exporter", "how to get an NTN",
+    "how to apply for an export license", "exporter registration")
+  - Trade policy documents or agreements (in the context of how to USE them, not just what they are)
+  Return ["search_trade_documents"] for ALL of these — never answer from general knowledge alone.
+
+STEP 0B — Conversational / General Knowledge (NO tools needed → return [])
+  Return [] ONLY if the query is clearly conversational or asking for a generic definition:
   - Greetings or small talk ("hello", "hi", "how are you", "thanks", "bye", "good morning")
-  - General trade concept or definition that does NOT require looking up a specific product,
-    tariff rate, or HS code from a database:
+  - Pure definitions with no product/procedure context:
       ("what is an HS code", "what is FOB", "what is CIF", "what is a letter of credit",
        "what is the difference between FOB and CIF", "what is GSP", "explain Incoterms",
-       "what is customs clearance", "what is a bill of lading", "what is a commercial invoice")
+       "what is customs clearance", "what is a bill of lading", "what is a commercial invoice",
+       "what is a letter of credit and how does it work")
   - Follow-up or clarification on a previous answer ("explain more", "what does that mean",
     "can you elaborate", "tell me more", "go on")
-  - Any question answerable from general trade knowledge without a product/country database lookup
-  Return [] for these — the LLM answers directly from its expertise.
+  DO NOT use this step for queries about specific procedures, documents, or named schemes —
+  those belong in STEP 0 above.
+  Return [] for these only — the LLM answers directly from its expertise.
 
 STEP 1 — Shipping
   If the query is about shipping routes, freight costs, transit times, or logistics from Pakistan to USA:
@@ -1239,10 +1394,14 @@ STEP 2 — HS Codes / Tariffs / Duties / Classifications / Products
        This applies even for "taxes", "duties", "rates", "codes" — the country qualifier wins.
 
   B. User says "US only" OR uses ANY of these signals: "in the US", "in the United States",
-       "American", "US tariff", "US duty", "US taxes", "US hs code", "HTS":
+       "American", "US tariff", "US duty", "US taxes", "US hs code", "HTS", "US import duties",
+       "import duties in the US", "duties when importing to the US":
        AND does NOT mention Pakistan/PCT/Pakistani
        → include ONLY "search_us_hs_data"
        This applies even for "taxes", "duties", "rates", "codes" — the country qualifier wins.
+       SPECIAL CASE — Export-to-US queries: If the user says "export [product] from Pakistan/Lahore/Karachi
+       to [US city/USA]" AND asks about "US import duties" or "US tariffs", the relevant duty data is in
+       the US database — return ONLY "search_us_hs_data".
 
   C. Everything else — no country mentioned, OR both countries mentioned, OR generic product query:
        → include BOTH "search_pakistan_hs_data" AND "search_us_hs_data"
@@ -1262,45 +1421,65 @@ STEP 4 — Policy / Documents / General Trade Procedures
   documentation requirements, licensing, compliance, or general "how to" trade questions
   (e.g. "how do I start exporting", "what documents are needed to export",
    "how to get an NTN", "DTRE scheme", "EDF form", "Pakistan trade agreements",
-   "what is the process to register as an exporter"):
+   "what is the process to register as an exporter", "what documents are required to import/export"):
     → include "search_trade_documents"
   Also include alongside Neo4j tools when policy context would enrich the answer.
 
+CRITICAL OVERRIDE RULES (apply before all steps above):
+  • Any query asking for a SPECIFIC rate (MFN rate, Column 2 rate, special rate, general duty rate)
+    on a SPECIFIC product MUST call the appropriate Neo4j tool — even if it mentions rate types
+    like "Column 2" which sound like general concepts. If the product is for the US → search_us_hs_data.
+  • Any query about importing/exporting a specific product (vehicles, cars, motorcycles, electronics,
+    food, etc.) into/from Pakistan → MUST call search_pakistan_hs_data for duty data.
+    Never answer import duty queries from general knowledge alone.
+  • "what documents are required to import/export" or "what procedures are needed" for a specific
+    activity → MUST call search_trade_documents, even if the answer seems general.
+
 Examples (follow these exactly):
-  "hello" / "hi" / "how are you"                          → []
-  "what is an HS code"                                     → []
-  "what is FOB"                                            → []
-  "explain CIF vs FOB"                                     → []
-  "what is a letter of credit"                             → []
-  "how does customs clearance work in general"             → []
-  "explain that further"                                   → []
-  "how do I start exporting from Pakistan"                 → ["search_trade_documents"]
-  "what documents are needed to export goods"              → ["search_trade_documents"]
-  "how to register as an exporter in Pakistan"             → ["search_trade_documents"]
-  "give me the hs codes for fruits"                        → ["search_pakistan_hs_data", "search_us_hs_data"]
-  "hs code for mangoes"                                    → ["search_pakistan_hs_data", "search_us_hs_data"]
-  "hs codes for textiles"                                  → ["search_pakistan_hs_data", "search_us_hs_data"]
-  "tariffs for rice"                                       → ["search_pakistan_hs_data", "search_us_hs_data"]
-  "duty on electronics"                                    → ["search_pakistan_hs_data", "search_us_hs_data"]
-  "classification for steel"                               → ["search_pakistan_hs_data", "search_us_hs_data"]
-  "what is the hs code for smartphones in pakistan"        → ["search_pakistan_hs_data"]
-  "pakistan customs duty on cars"                          → ["search_pakistan_hs_data"]
-  "US tariff on cotton"                                    → ["search_us_hs_data"]
-  "HTS code for live horses"                               → ["search_us_hs_data"]
-  "taxes on horses in the US"                              → ["search_us_hs_data"]
-  "duty on mangoes in the US"                              → ["search_us_hs_data"]
-  "hs code for rice in the US"                             → ["search_us_hs_data"]
-  "what are the taxes on steel in the United States"       → ["search_us_hs_data"]
-  "taxes on horses in Pakistan"                            → ["search_pakistan_hs_data"]
-  "duty on mangoes in Pakistan"                            → ["search_pakistan_hs_data"]
-  "compare pakistan and us duties on steel"                → ["search_pakistan_hs_data", "search_us_hs_data"]
-  "procedures and measures for mangoes"                    → ["search_pakistan_hs_data"]
-  "exemptions for textile imports in pakistan"             → ["search_pakistan_hs_data"]
-  "what is an SRO exemption"                               → ["search_trade_documents"]
-  "what is the DTRE scheme"                                → ["search_trade_documents"]
-  "show me shipping routes from karachi to new york"       → ["evaluate_shipping_routes"]
-  "cheapest way to ship textiles from pakistan to usa"     → ["evaluate_shipping_routes", "search_pakistan_hs_data"]
-  "what are automotive products"                           → ["search_pakistan_hs_data", "search_us_hs_data", "search_trade_documents"]
+  "hello" / "hi" / "how are you"                                   → []
+  "what is an HS code"                                              → []
+  "what is FOB"                                                     → []
+  "explain CIF vs FOB"                                              → []
+  "what is a letter of credit"                                      → []
+  "how does customs clearance work in general"                      → []
+  "explain that further"                                            → []
+  "how do I start exporting from Pakistan"                          → ["search_trade_documents"]
+  "what documents are needed to export goods from Pakistan"         → ["search_trade_documents"]
+  "what documents are required to export goods from Pakistan"       → ["search_trade_documents"]
+  "what is the DTRE scheme and who is eligible"                     → ["search_trade_documents"]
+  "how to register as an exporter in Pakistan"                      → ["search_trade_documents"]
+  "what procedures are required to import machinery into Pakistan"  → ["search_pakistan_hs_data", "search_trade_documents"]
+  "can I import a used car from the US into Pakistan, what duties"  → ["search_pakistan_hs_data"]
+  "import duties on used cars in Pakistan"                          → ["search_pakistan_hs_data"]
+  "I want to export leather goods from Lahore to New York, what are the US import duties" → ["search_us_hs_data"]
+  # NOTE: for the above, search with query "outer surface of leather" to get HTS 4202.11.00 (8% rate)
+  "export textiles from Pakistan to USA, what will US customs charge"  → ["search_us_hs_data"]
+  "column 2 rate for steel pipes imported into the US"              → ["search_us_hs_data"]
+  "what is the column 2 rate for [product] in the US"              → ["search_us_hs_data"]
+  "give me the hs codes for fruits"                                 → ["search_pakistan_hs_data", "search_us_hs_data"]
+  "hs code for mangoes"                                             → ["search_pakistan_hs_data", "search_us_hs_data"]
+  "hs codes for textiles"                                           → ["search_pakistan_hs_data", "search_us_hs_data"]
+  "tariffs for rice"                                                → ["search_pakistan_hs_data", "search_us_hs_data"]
+  "duty on electronics"                                             → ["search_pakistan_hs_data", "search_us_hs_data"]
+  "classification for steel"                                        → ["search_pakistan_hs_data", "search_us_hs_data"]
+  "what is the hs code for smartphones in pakistan"                 → ["search_pakistan_hs_data"]
+  "pakistan customs duty on cars"                                   → ["search_pakistan_hs_data"]
+  "US tariff on cotton"                                             → ["search_us_hs_data"]
+  "HTS code for live horses"                                        → ["search_us_hs_data"]
+  "taxes on horses in the US"                                       → ["search_us_hs_data"]
+  "duty on mangoes in the US"                                       → ["search_us_hs_data"]
+  "hs code for rice in the US"                                      → ["search_us_hs_data"]
+  "what are the taxes on steel in the United States"                → ["search_us_hs_data"]
+  "taxes on horses in Pakistan"                                     → ["search_pakistan_hs_data"]
+  "duty on mangoes in Pakistan"                                     → ["search_pakistan_hs_data"]
+  "compare pakistan and us duties on steel"                         → ["search_pakistan_hs_data", "search_us_hs_data"]
+  "procedures and measures for mangoes"                             → ["search_pakistan_hs_data"]
+  "exemptions for textile imports in pakistan"                      → ["search_pakistan_hs_data"]
+  "what is an SRO exemption"                                        → ["search_trade_documents"]
+  "what is the DTRE scheme"                                         → ["search_trade_documents"]
+  "show me shipping routes from karachi to new york"                → ["evaluate_shipping_routes"]
+  "cheapest way to ship textiles from pakistan to usa"              → ["evaluate_shipping_routes", "search_pakistan_hs_data"]
+  "what are automotive products"                                    → ["search_pakistan_hs_data", "search_us_hs_data", "search_trade_documents"]
 
 Respond with ONLY the JSON array. No explanation, no markdown.
 """

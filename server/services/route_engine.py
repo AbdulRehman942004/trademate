@@ -45,6 +45,23 @@ _DESTINATION_CHARGES = _DATA["destination_charges"]
 _HS_DUTY_RATES     = _DATA["hs_duty_rates"]
 _FIXED             = _DATA["fixed_charges"]
 
+# US city names that may appear verbatim in static route names
+_US_CITY_NAMES = [
+    "New York", "Los Angeles", "Long Beach", "Chicago",
+    "Miami", "Savannah", "Seattle", "Baltimore",
+    "US Both Coasts",
+]
+
+
+def _localize_route_name(name: str, destination_city: str) -> str:
+    """Replace the hardcoded US city in a route name with the actual destination."""
+    dest = destination_city.title()
+    for city in _US_CITY_NAMES:
+        if city in name and city.lower() != dest.lower():
+            return name.replace(city, dest, 1)
+    return name
+
+
 # ── Destination → region mapping (for route filtering) ────────────────────────
 
 _DEST_REGION: dict[str, str] = {
@@ -96,15 +113,21 @@ def _route_is_applicable(route: dict, cargo_type: str, dest_region: str) -> bool
     if cargo_type == "AIR" and "AIR_KG" not in route["freight_rates"]:
         return False
 
-    # Destination region filter
     route_region = route["destination_region"]
     if route_region == "BOTH":
         return True
+
+    # AIR routes fly into a specific airport — exact region match only.
+    # (No routing Chicago ORD for New York, or JFK for Chicago.)
+    if cargo_type == "AIR":
+        return route_region == dest_region
+
+    # SEA/LCL destination region filter
     if dest_region == "USWC" and route_region != "USWC":
         return False
     if dest_region == "USEC" and route_region == "USWC":
         return False
-    # USMW (Chicago) accepts USWC ports with inland rail — allow USWC routes
+    # USMW (Chicago): sea routes from any coast are valid via inland rail
     if dest_region == "USMW":
         return True
 
@@ -123,26 +146,28 @@ def _calculate_cost(
 ) -> CostBreakdown:
     ct = req.cargo_type
     rates = route["freight_rates"]
+    # FCL: costs that scale per container; AIR/LCL: always 1 unit
+    n_units = req.container_count if ct.startswith("FCL") else 1
 
-    # 1. Inland haulage
+    # 1. Inland haulage (per container)
     if req.cargo_type == "AIR":
         inland_cost = inland["to_air_port_cost_usd"]
     else:
-        inland_cost = inland["to_sea_port_cost_usd"]
+        inland_cost = inland["to_sea_port_cost_usd"] * n_units
 
-    # 2. Origin THC (sea only)
-    origin_thc = route["origin_thc_usd"] if ct != "AIR" else 0
+    # 2. Origin THC (sea only, per container)
+    origin_thc = route["origin_thc_usd"] * n_units if ct != "AIR" else 0
 
     # 3. Ocean / air freight
     if ct == "FCL_20":
         fr = rates["FCL_20"]
-        freight_min, freight_max = fr["min"], fr["max"]
+        freight_min, freight_max = fr["min"] * n_units, fr["max"] * n_units
     elif ct == "FCL_40":
         fr = rates["FCL_40"]
-        freight_min, freight_max = fr["min"], fr["max"]
+        freight_min, freight_max = fr["min"] * n_units, fr["max"] * n_units
     elif ct == "FCL_40HC":
         fr = rates["FCL_40HC"]
-        freight_min, freight_max = fr["min"], fr["max"]
+        freight_min, freight_max = fr["min"] * n_units, fr["max"] * n_units
     elif ct == "LCL":
         cbm = req.cargo_volume_cbm or 1.0
         fr = rates["LCL_CBM"]
@@ -153,11 +178,11 @@ def _calculate_cost(
         freight_min = fr["min"] * chargeable_kg
         freight_max = fr["max"] * chargeable_kg
 
-    # 4. Transshipment THC (sea only, per hub)
+    # 4. Transshipment THC (sea only, per hub per container)
     n_hubs = len([h for h in route["hubs"] if "Canal" not in h])  # canals don't charge THC
-    trans_thc = route["transshipment_thc_usd"] * n_hubs if ct != "AIR" else 0
+    trans_thc = route["transshipment_thc_usd"] * n_hubs * n_units if ct != "AIR" else 0
 
-    # 5. Fixed charges (ISF, B/L, seal, ISPS, docs)
+    # 5. Fixed charges — per B/L (once per shipment, not per container)
     fixed = (
         _FIXED["isf_filing_usd"]
         + _FIXED["bl_fee_usd"]
@@ -166,10 +191,10 @@ def _calculate_cost(
         + _FIXED["documentation_usd"]
     ) if ct != "AIR" else _FIXED["documentation_usd"]
 
-    # 6. Destination charges
-    dest_thc    = dest["thc_usd"] if ct != "AIR" else 0
+    # 6. Destination charges (THC per container, broker/drayage per container)
+    dest_thc    = dest["thc_usd"] * n_units if ct != "AIR" else 0
     broker      = dest["customs_broker_usd"]
-    drayage     = dest["drayage_usd"]
+    drayage     = dest["drayage_usd"] * n_units
 
     # 7. Government fees (on cargo value)
     hmf = round(req.cargo_value_usd * _FIXED["hmf_rate"], 2)
@@ -389,9 +414,16 @@ def evaluate_routes(req: RouteEvaluationRequest) -> RouteEvaluationResponse:
             )
             rate_source = "live"
 
+        # Air routes contain airport codes (JFK, ORD, LAX) — keep name as-is.
+        # Sea routes use generic city names that need localising for non-default destinations.
+        display_name = (
+            route["name"]
+            if route["mode"] == "AIR"
+            else _localize_route_name(route["name"], req.destination_city)
+        )
         results.append(RouteResult(
             id=route["id"],
-            name=route["name"],
+            name=display_name,
             mode=route["mode"],
             origin_port=route["origin_port"],
             hubs=route["hubs"],

@@ -68,9 +68,11 @@ export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
         {/* Streaming cursor appended while streaming */}
         {isStreaming && message.content && <StreamingCursor inline />}
 
-        {/* Inline route widget — rendered after streaming completes */}
-        {!isStreaming && message.widget?.type === "route_evaluation" && (
-          <RouteWidget data={message.widget.data} />
+        {/* Inline route widgets — one per evaluate_shipping_routes tool call */}
+        {!isStreaming && message.widgets?.map((w, i) =>
+          w.type === "route_evaluation" ? (
+            <RouteWidget key={i} data={w.data} />
+          ) : null
         )}
 
         {/* Action bar — visible on hover when not streaming */}

@@ -46,6 +46,12 @@ class RouteEvaluationRequest(BaseModel):
     cargo_length_cm: Optional[float] = Field(None, gt=0)
     cargo_width_cm: Optional[float] = Field(None, gt=0)
     cargo_height_cm: Optional[float] = Field(None, gt=0)
+    # Number of containers (FCL only — multiplies per-container costs)
+    container_count: int = Field(
+        default=1,
+        ge=1,
+        description="Number of FCL containers. Freight, THC, and drayage are multiplied by this value."
+    )
     # Optimization preference: 0 = minimize time, 1 = minimize cost
     cost_weight: float = Field(
         default=0.5,

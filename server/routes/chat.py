@@ -261,15 +261,21 @@ async def _stream_agent(
 
         yield _sse({"type": "done", "conversation_id": conversation_id})
 
-        # If the route tool was called, emit a widget event with the full data
-        if widget_store:
+        # If the route tool was called, emit one widget event per result.
+        # The tool may be called multiple times (e.g. air vs sea comparison,
+        # or two-destination query) — all results must be sent.
+        for i, widget_data in enumerate(widget_store):
             yield _sse({
                 "type": "widget",
                 "widget_type": "route_evaluation",
-                "data": widget_store[0],
+                "data": widget_data,
                 "conversation_id": conversation_id,
             })
-            logger.info("━━━ [WIDGET] Sent route_evaluation widget for conv %s", conversation_id)
+        if widget_store:
+            logger.info(
+                "━━━ [WIDGET] Sent %d route_evaluation widget(s) for conv %s",
+                len(widget_store), conversation_id,
+            )
 
         # Generate and stream title only for the first message
         if is_first_message and full_reply:

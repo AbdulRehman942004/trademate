@@ -12,7 +12,7 @@ export interface Message {
   role: Role;
   content: string;
   createdAt: Date;
-  widget?: MessageWidget;
+  widgets?: MessageWidget[];
 }
 
 export interface Conversation {

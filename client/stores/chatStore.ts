@@ -117,7 +117,8 @@ export const useChatStore = create<ChatState>()(
             const messages = [...conv.messages];
             const lastIdx = messages.length - 1;
             if (lastIdx >= 0 && messages[lastIdx].role === "assistant") {
-              messages[lastIdx] = { ...messages[lastIdx], widget };
+              const existing = messages[lastIdx].widgets ?? [];
+              messages[lastIdx] = { ...messages[lastIdx], widgets: [...existing, widget] };
             }
             return { ...conv, messages };
           }),
