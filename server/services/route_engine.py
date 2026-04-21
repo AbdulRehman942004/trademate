@@ -62,6 +62,39 @@ def _localize_route_name(name: str, destination_city: str) -> str:
     return name
 
 
+# ── Pakistan origin city → nearest international air gateway ──────────────────
+# Air routes in the static graph are all defined as "Karachi → …" using KHI.
+# For users exporting from northern/central Pakistan, the realistic air gateway
+# is LHE (Lahore), SKT (Sialkot), or ISB (Islamabad) — not KHI. The values here
+# let us re-base the displayed origin_port and route name per request.
+
+_PK_ORIGIN_AIR_GATEWAY: dict[str, tuple[str, str]] = {
+    "Karachi":    ("KHI", "Karachi"),
+    "Lahore":     ("LHE", "Lahore"),
+    "Faisalabad": ("LHE", "Lahore"),     # FSL has no wide-body intl cargo; trucks to LHE
+    "Sialkot":    ("SKT", "Sialkot"),
+    "Islamabad":  ("ISB", "Islamabad"),
+    "Peshawar":   ("ISB", "Islamabad"),  # PEW intl cargo is limited; trucks to ISB
+    "Multan":     ("LHE", "Lahore"),
+}
+
+_PK_ORIGIN_CITIES_IN_ROUTE_NAMES = ["Karachi", "Lahore", "Sialkot", "Islamabad"]
+
+
+def _localize_air_route(route: dict, origin_city: str) -> dict:
+    """Return a shallow copy of an AIR route with origin_port and displayed
+    origin city rewritten to the user's nearest Pakistani air gateway."""
+    port_code, city_name = _PK_ORIGIN_AIR_GATEWAY.get(origin_city, ("KHI", "Karachi"))
+    localized = dict(route)
+    localized["origin_port"] = port_code
+    name = route.get("name", "")
+    for existing in _PK_ORIGIN_CITIES_IN_ROUTE_NAMES:
+        if name.startswith(f"{existing} →") and existing != city_name:
+            localized["name"] = name.replace(existing, city_name, 1)
+            break
+    return localized
+
+
 # ── Destination → region mapping (for route filtering) ────────────────────────
 
 _DEST_REGION: dict[str, str] = {
@@ -370,6 +403,8 @@ def evaluate_routes(req: RouteEvaluationRequest) -> RouteEvaluationResponse:
 
     # ── Pre-fetch live rates concurrently (deduplicated) ──────────────────────
     applicable_routes = [r for r in _ROUTES if _route_is_applicable(r, req.cargo_type, dest_region)]
+    if req.cargo_type == "AIR":
+        applicable_routes = [_localize_air_route(r, req.origin_city) for r in applicable_routes]
     live_rates = _prefetch_live_rates(applicable_routes, req, chargeable_kg)
 
     # ── Build route results ────────────────────────────────────────────────────

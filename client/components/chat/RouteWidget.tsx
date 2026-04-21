@@ -19,6 +19,9 @@ const ROUTE_COORDINATES: Record<string, [number, number]> = {
   PKKHI:  [24.8615, 67.0099],
   PKKHIA: [24.8615, 67.0099],  // alias used in pk_usa_routes.json
   KHI:    [24.9061, 67.1605],
+  LHE:    [31.5216, 74.4036],  // Allama Iqbal Intl (Lahore)
+  ISB:    [33.5593, 72.8258],  // Islamabad Intl
+  SKT:    [32.5353, 74.3639],  // Sialkot Intl
 
   // ── Transshipment hubs ────────────────────────────────────────────────────
   LKCMB:        [6.9271,   79.8612],
@@ -54,6 +57,12 @@ const ROUTE_COORDINATES: Record<string, [number, number]> = {
 
   // ── City name fallbacks (used when port code lookup fails) ────────────────
   "Karachi":     [24.8607,   67.0011],
+  "Lahore":      [31.5204,   74.3587],
+  "Faisalabad":  [31.4504,   73.1350],
+  "Sialkot":     [32.4945,   74.5229],
+  "Islamabad":   [33.6844,   73.0479],
+  "Peshawar":    [34.0151,   71.5249],
+  "Multan":      [30.1575,   71.5249],
   "Los Angeles": [34.0522, -118.2437],
   "New York":    [40.7128,  -74.0060],
   "Chicago":     [41.8781,  -87.6298],

@@ -1,6 +1,12 @@
 # CHANGELOG
 
 
+
+
+### v6.2.1
+#### Updated
+- feat: enhance route evaluation and text search functionality with widget support and container handling
+
 ### v6.2.0 - 04/19/2026
 
 #### Added
