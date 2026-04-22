@@ -14,6 +14,11 @@ def create_db_tables():
     import models.conversation  # noqa: F401
     import models.otp  # noqa: F401
     SQLModel.metadata.create_all(engine)
+    
+    # Run manual migrations for schema changes not handled by create_all
+    from .migrations import run_migrations
+    run_migrations()
+
 
 
 def get_session():

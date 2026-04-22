@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Column, DateTime, Index, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Index, Integer, String
 from sqlmodel import Field, SQLModel
 
 
@@ -42,7 +42,7 @@ class OtpCode(SQLModel, table=True):
     )
     used: bool = Field(
         default=False,
-        sa_column=Column(String(5), nullable=False, default="false"),
+        sa_column=Column(Boolean, nullable=False, default=False),
     )
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
