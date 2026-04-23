@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import L from "leaflet";
+import type * as LType from "leaflet";
+const L = typeof window !== "undefined" ? require("leaflet") : null;
 import {
   Ship, Plane, AlertTriangle, AlertCircle, Info,
   ChevronDown, ChevronUp, CheckCircle2, Zap, Scale,
@@ -432,8 +433,8 @@ export default function RoutesPage() {
     : [];
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const mapInstanceRef = useRef<L.Map | null>(null);
-  const routeLayerRef = useRef<L.LayerGroup | null>(null);
+  const mapInstanceRef = useRef<LType.Map | null>(null);
+  const routeLayerRef = useRef<LType.LayerGroup | null>(null);
 
   const routeLineData = useMemo(() => {
     if (!result) return [];
@@ -445,7 +446,7 @@ export default function RoutesPage() {
   }, [result]);
 
   useEffect(() => {
-    if (!result || !mapContainerRef.current) return;
+    if (!L || !result || !mapContainerRef.current) return;
 
     if (!mapInstanceRef.current) {
       mapInstanceRef.current = L.map(mapContainerRef.current, {

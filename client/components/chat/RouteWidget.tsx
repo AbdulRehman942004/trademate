@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import L from "leaflet";
+import type * as LType from "leaflet";
+const L = typeof window !== "undefined" ? require("leaflet") : null;
 import "leaflet/dist/leaflet.css";
 import {
   Ship, Plane, AlertTriangle, AlertCircle, Info,
@@ -114,7 +115,8 @@ function getRouteStops(route: RouteResult, destinationCity: string): RouteStop[]
 }
 
 // Inline-style label rendered via L.divIcon (no Tailwind – outside React tree)
-function makeLabelIcon(text: string, type: StopType): L.DivIcon {
+function makeLabelIcon(text: string, type: StopType): any {
+  if (!L) return null;
   const bg =
     type === "origin"      ? "#7c3aed" :
     type === "destination" ? "#0f766e" : "#1d4ed8";
@@ -148,9 +150,9 @@ function RouteMap({ data }: { data: RouteEvaluationResponse }) {
   const [mapKey, setMapKey] = useState(0);
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const mapInstanceRef  = useRef<L.Map | null>(null);
-  const routeLayerRef   = useRef<L.LayerGroup | null>(null);
-  const tileLayerRef    = useRef<L.TileLayer | null>(null);
+  const mapInstanceRef  = useRef<LType.Map | null>(null);
+  const routeLayerRef   = useRef<LType.LayerGroup | null>(null);
+  const tileLayerRef    = useRef<LType.TileLayer | null>(null);
 
   const routeLineData = useMemo(() => data.routes.map(route => ({
     route,
@@ -169,7 +171,7 @@ function RouteMap({ data }: { data: RouteEvaluationResponse }) {
   // Destroying the old instance each time guarantees tiles are always requested
   // for the actual container dimensions (fixes blank tiles on fullscreen toggle).
   useEffect(() => {
-    if (!mapContainerRef.current) return;
+    if (!L || !mapContainerRef.current) return;
 
     // Destroy any stale Leaflet instance before creating a fresh one.
     if (mapInstanceRef.current) {

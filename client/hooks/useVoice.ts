@@ -101,7 +101,7 @@ export function useVoice(token: string) {
       wsRef.current = null;
     }
     if (audioCtxRef.current) {
-      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current.close().catch(() => { });
       audioCtxRef.current = null;
     }
     playbackCursorRef.current = 0;
@@ -133,7 +133,13 @@ export function useVoice(token: string) {
   const start = useCallback(async () => {
     if (statusRef.current !== "idle" && statusRef.current !== "ended") return;
     statusRef.current = "connecting";
-    setState({ status: "connecting", transcript: "", elapsedSeconds: 0, error: null });
+    setState({
+      status: "connecting",
+      transcript: "",
+      elapsedSeconds: 0,
+      error: null,
+      toolActivity: null,
+    });
 
     // Request microphone access
     let stream: MediaStream;
@@ -221,7 +227,7 @@ export function useVoice(token: string) {
       if (event.type === "response.audio.delta" && typeof event.delta === "string") {
         const f32 = pcm16Base64ToFloat32(event.delta);
         const buffer = audioCtx.createBuffer(1, f32.length, 24000);
-        buffer.copyToChannel(f32, 0);
+        buffer.copyToChannel(f32 as any, 0);
         const source = audioCtx.createBufferSource();
         source.buffer = buffer;
         source.connect(audioCtx.destination);
@@ -271,21 +277,23 @@ export function useVoice(token: string) {
         event.type === "response.audio_transcript.delta" &&
         typeof event.delta === "string"
       ) {
-        setState((s) => ({ ...s, transcript: s.transcript + event.delta }));
+        const delta = event.delta;
+        setState((s) => ({ ...s, transcript: s.transcript + delta }));
       }
 
       // User speech transcription — append as a new labelled turn
       if (
         event.type ===
-          "conversation.item.input_audio_transcription.completed" &&
+        "conversation.item.input_audio_transcription.completed" &&
         typeof event.transcript === "string" &&
         event.transcript.trim()
       ) {
+        const transcript = event.transcript.trim();
         setState((s) => ({
           ...s,
           transcript:
             (s.transcript ? s.transcript + "\n\n" : "") +
-            `You: ${event.transcript.trim()}`,
+            `You: ${transcript}`,
         }));
       }
 
