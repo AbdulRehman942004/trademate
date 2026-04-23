@@ -198,6 +198,7 @@ function RouteMap({ data }: { data: RouteEvaluationResponse }) {
 
     const map        = mapInstanceRef.current;
     const layerGroup = routeLayerRef.current;
+    if (!map || !layerGroup) return;
 
     layerGroup.clearLayers();
     const allCoords:    [number, number][] = [];
