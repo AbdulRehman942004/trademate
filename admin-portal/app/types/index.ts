@@ -140,6 +140,32 @@ export interface SecuritySettings {
   updated_at: string;
 }
 
+export interface TippStats {
+  master_codes: number;
+  tariffs: number;
+  cess: number;
+  exemptions: number;
+  antidump: number;
+  measures: number;
+  procedures: number;
+  products: number;
+  failed: number;
+}
+
+export interface TippTaskInfo {
+  status: 'idle' | 'running' | 'completed' | 'failed';
+  last_run: string | null;
+  pid: number | null;
+  error?: string;
+}
+
+export interface TippTasksStatus {
+  full_scrape: TippTaskInfo;
+  products_scrape: TippTaskInfo;
+  details_scrape: TippTaskInfo;
+  combine_data: TippTaskInfo;
+}
+
 // ==================== Navigation ====================
 
 export interface NavItem {

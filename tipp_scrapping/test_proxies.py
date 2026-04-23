@@ -1,39 +1,7 @@
 import requests
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-PROXIES = [
-    "45.43.83.148:6431:wlukdecd:e2u6bssg5n7i",
-    "82.24.236.68:7878:wlukdecd:e2u6bssg5n7i",
-    "82.24.242.39:7858:wlukdecd:e2u6bssg5n7i",
-    "107.181.142.34:5627:wlukdecd:e2u6bssg5n7i",
-    "45.43.65.112:6626:wlukdecd:e2u6bssg5n7i",
-    "107.181.148.183:6043:wlukdecd:e2u6bssg5n7i",
-    "198.37.116.109:6068:wlukdecd:e2u6bssg5n7i",
-    "45.39.13.121:5558:wlukdecd:e2u6bssg5n7i",
-    "64.137.77.99:5534:wlukdecd:e2u6bssg5n7i",
-    "103.99.33.252:6247:wlukdecd:e2u6bssg5n7i",
-    "104.253.82.202:6623:wlukdecd:e2u6bssg5n7i",
-    "45.41.162.100:6737:wlukdecd:e2u6bssg5n7i",
-    "92.112.137.90:6033:wlukdecd:e2u6bssg5n7i",
-    "154.29.65.179:6287:wlukdecd:e2u6bssg5n7i",
-    "82.26.208.115:5422:wlukdecd:e2u6bssg5n7i",
-    "198.23.147.145:5160:wlukdecd:e2u6bssg5n7i",
-    "45.39.5.60:6498:wlukdecd:e2u6bssg5n7i",
-    "50.114.99.68:6809:wlukdecd:e2u6bssg5n7i",
-    "216.173.120.231:6523:wlukdecd:e2u6bssg5n7i",
-    "82.27.246.212:7536:wlukdecd:e2u6bssg5n7i",
-    "31.58.10.10:5978:wlukdecd:e2u6bssg5n7i",
-    "45.39.25.128:5563:wlukdecd:e2u6bssg5n7i",
-    "103.75.228.37:6116:wlukdecd:e2u6bssg5n7i",
-    "64.137.59.61:6654:wlukdecd:e2u6bssg5n7i",
-    "136.0.207.52:6629:wlukdecd:e2u6bssg5n7i",
-    "82.21.244.167:5490:wlukdecd:e2u6bssg5n7i",
-    "104.252.49.195:6131:wlukdecd:e2u6bssg5n7i",
-    "104.239.35.132:5814:wlukdecd:e2u6bssg5n7i",
-    "173.214.177.99:5790:wlukdecd:e2u6bssg5n7i",
-    "104.239.90.85:6476:wlukdecd:e2u6bssg5n7i",
-]
+from config import PROXY_LIST as PROXIES
 
 TEST_URL = "https://httpbin.org/ip"
 TIMEOUT = 10

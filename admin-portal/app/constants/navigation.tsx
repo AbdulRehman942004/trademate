@@ -101,6 +101,12 @@ export const NAV_ITEMS: NavItem[] = [
     icon: BarChart3,
   },
   {
+    title: 'TIPP Scraper',
+    href: '/data-pipeline/tipp-scraper',
+    icon: Search,
+    badge: 'New',
+  },
+  {
     title: 'Settings',
     href: '/settings',
     icon: Settings,
