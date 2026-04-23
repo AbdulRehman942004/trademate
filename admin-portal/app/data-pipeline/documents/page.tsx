@@ -62,7 +62,7 @@ export default function DocumentsPage() {
       const formData = new FormData();
       formData.append('file', selectedFile);
 
-      const uploadResponse = await fetch(`${api.baseURL}/v1/admin/data-pipeline/upload`, {
+      const uploadResponse = await fetch(`${api.getBaseURL()}/v1/admin/data-pipeline/upload`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${api.getAuthToken()}`,
@@ -78,7 +78,7 @@ export default function DocumentsPage() {
 
       // Step 2: Trigger ingestion
       const ingestResponse = await fetch(
-        `${api.baseURL}/v1/admin/data-pipeline/ingest?s3_key=${encodeURIComponent(s3_key)}`,
+        `${api.getBaseURL()}/v1/admin/data-pipeline/ingest?s3_key=${encodeURIComponent(s3_key)}`,
         {
           method: 'POST',
           headers: {

@@ -164,6 +164,16 @@ class APIService {
   }
 
   /**
+   * Get current authentication token
+   */
+  public getAuthToken(): string | null {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('auth_token');
+    }
+    return null;
+  }
+
+  /**
    * Get current base URL
    */
   public getBaseURL(): string {

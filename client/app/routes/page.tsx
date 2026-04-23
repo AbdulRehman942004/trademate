@@ -423,7 +423,7 @@ export default function RoutesPage() {
   const topRoutes = result
     ? ["cheapest", "fastest", "balanced"].map(tag =>
         result.routes.find(r => r.id === result.recommended[tag as keyof typeof result.recommended])
-      ).filter((r): r is RouteResult => Boolean(r) && Boolean(r.tag))
+      ).filter((r): r is RouteResult => !!r && !!r.tag)
         .filter((r, i, arr) => arr.findIndex(x => x.id === r.id) === i)
     : [];
 
