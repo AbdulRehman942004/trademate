@@ -3,7 +3,7 @@ import subprocess
 import logging
 from typing import Dict, Optional, List
 from datetime import datetime
-from fastapi import FastAPI, BackgroundTask, HTTPException
+from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import csv
