@@ -9,6 +9,7 @@ Auth: ?key=API_KEY  (query param)
 Docs: https://ship.freightos.com/api/shippingCalculator
 """
 
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -240,4 +241,63 @@ def get_rate(
     except Exception as exc:
         raise FreightosUnavailable(f"Freightos returned non-JSON response: {exc}") from exc
 
-    return _parse_response(data)
+    rate = _parse_response(data)
+
+    # ── 6. Persist to DB (fire-and-forget, never blocks the caller)
+    _save_to_db(
+        origin_port=origin_port,
+        dest_port=dest_port,
+        origin_code=origin_code,
+        dest_code=dest_code,
+        cargo_type=cargo_type,
+        loadtype=loadtype,
+        weight=weight,
+        http_status=resp.status_code,
+        raw_body=data,
+        rate=rate,
+    )
+
+    return rate
+
+
+def _save_to_db(
+    origin_port,
+    dest_port,
+    origin_code: str,
+    dest_code: str,
+    cargo_type: str,
+    loadtype: str,
+    weight: float,
+    http_status: int,
+    raw_body: dict,
+    rate: "FreightosRate",
+) -> None:
+    try:
+        from database.database import engine
+        from models.freightos_rate import FreightosRateRecord
+        from sqlmodel import Session
+
+        origin_name = origin_port if isinstance(origin_port, str) else ", ".join(origin_port)
+        dest_name   = dest_port   if isinstance(dest_port,   str) else ", ".join(dest_port)
+
+        record = FreightosRateRecord(
+            origin_name=origin_name,
+            origin_code=origin_code,
+            dest_name=dest_name,
+            dest_code=dest_code,
+            cargo_type=cargo_type,
+            loadtype=loadtype,
+            weight_kg=weight,
+            http_status=http_status,
+            num_quotes=1,
+            min_usd=rate.min_usd,
+            max_usd=rate.max_usd,
+            currency=rate.currency,
+            raw_response=json.dumps(raw_body, ensure_ascii=False),
+        )
+        with Session(engine) as session:
+            session.add(record)
+            session.commit()
+    except Exception:
+        # Never let DB persistence break a live user request
+        logger.warning("[FREIGHTOS] Failed to persist rate to DB", exc_info=True)
