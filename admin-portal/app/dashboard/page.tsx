@@ -119,18 +119,18 @@ export default function DashboardPage() {
     <DashboardLayout breadcrumbs={[{ title: 'Dashboard' }]}>
       <div className="space-y-6">
         {/* Page Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-gray-100">
               Dashboard
             </h1>
-            <p className="mt-2 text-gray-600 dark:text-gray-400">
+            <p className="mt-1 sm:mt-2 text-gray-600 dark:text-gray-400">
               Welcome back! Here's what's happening with TradeMate today.
             </p>
           </div>
           <button
             onClick={fetchStats}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            className="self-start sm:self-auto inline-flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
           >
             <Activity className="h-4 w-4" />
             Refresh
@@ -138,7 +138,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
           {statCards.map((stat) => {
             const Icon = stat.icon;
             return (
@@ -199,7 +199,7 @@ export default function DashboardPage() {
         </div>
 
         {/* System Overview */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
           <div className="bg-white dark:bg-gray-800 rounded-lg p-6 border border-gray-200 dark:border-gray-700">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
               System Overview
@@ -242,7 +242,7 @@ export default function DashboardPage() {
             <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
               Quick Actions
             </h2>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <a
                 href="/users"
                 className="p-4 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-700 hover:border-blue-500 dark:hover:border-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-colors"

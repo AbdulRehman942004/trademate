@@ -7,4 +7,5 @@ data
 
 *.log
 
+.next
 .serverless

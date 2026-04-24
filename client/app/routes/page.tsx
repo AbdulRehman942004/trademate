@@ -6,8 +6,9 @@ const L = typeof window !== "undefined" ? require("leaflet") : null;
 import {
   Ship, Plane, AlertTriangle, AlertCircle, Info,
   ChevronDown, ChevronUp, CheckCircle2, Zap, Scale,
-  Clock, DollarSign, BarChart2, RotateCcw, MapPin,
+  Clock, DollarSign, BarChart2, RotateCcw, MapPin, Menu,
 } from "lucide-react";
+import { useUIStore } from "@/stores/uiStore";
 import RouteService from "@/services/route.service";
 import { cn } from "@/lib/cn";
 import type {
@@ -250,7 +251,7 @@ function RouteCard({ route }: { route: RouteResult }) {
         </div>
 
         {/* Key metrics */}
-        <div className="mt-3 grid grid-cols-3 gap-2">
+        <div className="mt-3 grid grid-cols-1 xs:grid-cols-3 sm:grid-cols-3 gap-2">
           <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/60 p-2.5">
             <div className="flex items-center gap-1 text-zinc-400 mb-1">
               <DollarSign size={11} />
@@ -308,7 +309,7 @@ function RouteCard({ route }: { route: RouteResult }) {
       {/* Expanded breakdown */}
       {expanded && (
         <div className="border-t border-zinc-100 dark:border-zinc-800 px-4 pb-4 pt-3">
-          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-xs">
             <CostRow label="Inland haulage"        value={route.cost.inland_haulage}        />
             <CostRow label="Origin THC"            value={route.cost.origin_thc}            />
             <CostRow label="Ocean/air freight (min)" value={route.cost.ocean_air_freight_min} />
@@ -373,6 +374,7 @@ const INIT_FORM: RouteEvaluationRequest = {
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function RoutesPage() {
+  const { toggleMobileSidebar } = useUIStore();
   const [options,  setOptions]  = useState<RouteOptions | null>(null);
   const [form,     setForm]     = useState<RouteEvaluationRequest>(INIT_FORM);
   const [result,   setResult]   = useState<RouteEvaluationResponse | null>(null);
@@ -499,9 +501,17 @@ export default function RoutesPage() {
   return (
     <div className="flex flex-col h-full overflow-hidden bg-zinc-50 dark:bg-zinc-950">
       {/* Header */}
-      <div className="flex-shrink-0 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-6 py-4">
+      <div className="flex-shrink-0 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 sm:px-6 py-4">
         <div className="flex items-center gap-3">
-          <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center">
+          {/* Mobile hamburger */}
+          <button
+            onClick={toggleMobileSidebar}
+            aria-label="Open sidebar"
+            className="lg:hidden h-8 w-8 rounded-lg inline-flex items-center justify-center text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors flex-shrink-0"
+          >
+            <Menu size={18} />
+          </button>
+          <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center flex-shrink-0">
             <Ship size={16} className="text-white" />
           </div>
           <div>
@@ -512,7 +522,7 @@ export default function RoutesPage() {
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-5xl mx-auto px-6 py-6 space-y-6">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6">
 
           {/* Form */}
           <form
@@ -521,7 +531,7 @@ export default function RoutesPage() {
           >
             <h2 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100 mb-4">Shipment Details</h2>
 
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
               <SelectField
                 label="Origin City"
                 value={form.origin_city}

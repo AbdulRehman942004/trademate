@@ -1,10 +1,11 @@
 "use client";
 
 import { useRouter, usePathname } from "next/navigation";
-import { SquarePen, TrendingUp, Search, LogOut, Route } from "lucide-react";
+import { SquarePen, TrendingUp, Search, LogOut, Route, X } from "lucide-react";
 import { useChatStore } from "@/stores/chatStore";
 import { useAuthStore } from "@/stores/authStore";
 import { useLogout } from "@/hooks/useAuth";
+import { useUIStore } from "@/stores/uiStore";
 import { groupConversationsByDate } from "@/lib/utils";
 import { SidebarItem } from "./SidebarItem";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
@@ -28,6 +29,7 @@ export function Sidebar({ className }: SidebarProps) {
   const { user } = useAuthStore();
   const logout = useLogout();
   const pathname = usePathname();
+  const { mobileSidebarOpen, setMobileSidebarOpen } = useUIStore();
 
   const handleNewChat = () => {
     const id = createConversation();
@@ -42,8 +44,22 @@ export function Sidebar({ className }: SidebarProps) {
   const groups = groupConversationsByDate(conversations);
 
   return (
+    <>
+      {/* Mobile backdrop */}
+      {mobileSidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      )}
+
     <aside
       className={cn(
+        // Mobile: fixed overlay, slides in/out
+        "fixed inset-y-0 left-0 z-50 transition-transform duration-300",
+        mobileSidebarOpen ? "translate-x-0" : "-translate-x-full",
+        // Desktop: static in flex flow, always visible
+        "lg:relative lg:translate-x-0",
         "flex flex-col h-full w-64 flex-shrink-0",
         "bg-zinc-50 dark:bg-zinc-900",
         "border-r border-zinc-200 dark:border-zinc-800",
@@ -52,6 +68,19 @@ export function Sidebar({ className }: SidebarProps) {
     >
       {/* Brand */}
       <div className="flex items-center justify-between px-4 pt-5 pb-3">
+        {/* Mobile close button */}
+        <button
+          onClick={() => setMobileSidebarOpen(false)}
+          aria-label="Close sidebar"
+          className={cn(
+            "lg:hidden absolute top-3 right-3",
+            "h-7 w-7 rounded-lg inline-flex items-center justify-center",
+            "text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-100",
+            "hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
+          )}
+        >
+          <X size={15} />
+        </button>
         <div className="flex items-center gap-2.5">
           <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center flex-shrink-0">
             <TrendingUp size={14} className="text-white" />
@@ -156,5 +185,6 @@ export function Sidebar({ className }: SidebarProps) {
         </div>
       </div>
     </aside>
+    </>
   );
 }
