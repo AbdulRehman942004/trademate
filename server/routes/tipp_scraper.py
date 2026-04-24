@@ -4,6 +4,8 @@ server/routes/tipp_scraper.py — TIPP Scraper Admin API
 Proxies requests to the TIPP scraper backend (Port 8003).
 """
 
+import os
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -13,7 +15,7 @@ from routes.admin import _get_current_admin_user_id
 
 router = APIRouter(prefix="/v1/admin/tipp-scraper", tags=["Admin - TIPP Scraper"])
 
-TIPP_SCRAPER_BASE_URL = "http://localhost:8003"
+TIPP_SCRAPER_BASE_URL = os.getenv("TIPP_SCRAPER_URL", "http://localhost:8003")
 
 # ── Response Models ───────────────────────────────────────────────────────────
 

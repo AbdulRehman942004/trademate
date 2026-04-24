@@ -5,6 +5,8 @@ Proxies requests to the data pipeline backend and provides admin controls
 for document ingestion, research pipeline, and UN Comtrade data management.
 """
 
+import os
+
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
@@ -14,8 +16,7 @@ from routes.admin import _get_current_admin_user_id
 
 router = APIRouter(prefix="/v1/admin/data-pipeline", tags=["Admin - Data Pipeline"])
 
-# Data pipeline backend URL (same machine, different port)
-DATA_PIPELINE_BASE_URL = "http://localhost:8001"
+DATA_PIPELINE_BASE_URL = os.getenv("DATA_PIPELINE_URL", "http://localhost:8001")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

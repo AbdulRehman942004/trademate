@@ -3,20 +3,14 @@ __pycache__/
 *$py.class
 .env
 .venv/
-env/
 venv/
-ENV/
-env.bak/
-venv.bak/
+env/
 .git/
-.gitignore
 .next/
 node_modules/
+# Other services have their own build contexts
 client/
+admin-portal/
 knowledge_graph/
 data_pipeline/
 tipp_scrapping/
-README.md
-CHANGELOG.md
-Dockerfile
-docker-compose*.yml

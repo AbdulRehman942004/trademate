@@ -4,6 +4,8 @@ server/routes/knowledge_graph.py — Knowledge Graph Admin API
 Proxy requests to the knowledge graph API (port 8002)
 """
 
+import os
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -13,8 +15,7 @@ from routes.admin import _get_current_admin_user_id
 
 router = APIRouter(prefix="/v1/admin/knowledge-graph", tags=["Admin - Knowledge Graph"])
 
-# Knowledge graph API URL (same machine, port 8002)
-KG_API_BASE_URL = "http://localhost:8002"
+KG_API_BASE_URL = os.getenv("KNOWLEDGE_GRAPH_URL", "http://localhost:8002")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

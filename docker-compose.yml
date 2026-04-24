@@ -1,0 +1,174 @@
+services:
+
+  # ── Infrastructure ───────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Python back-ends ─────────────────────────────────────────────────────────
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    working_dir: /app/server
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    env_file: ./server/.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - DATA_PIPELINE_URL=http://data-pipeline:8001
+      - KNOWLEDGE_GRAPH_URL=http://knowledge-graph:8002
+      - TIPP_SCRAPER_URL=http://tipp-scraper:8003
+    volumes:
+      - ./server:/app/server
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  data-pipeline:
+    build:
+      context: ./data_pipeline/backend
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    env_file: ./data_pipeline/backend/.env
+    volumes:
+      - ./data_pipeline/backend:/app
+    restart: unless-stopped
+
+  knowledge-graph:
+    build:
+      context: ./knowledge_graph
+      dockerfile: Dockerfile
+    ports:
+      - "8002:8002"
+    env_file: ./knowledge_graph/.env
+    volumes:
+      - ./knowledge_graph:/app
+    restart: unless-stopped
+
+  tipp-scraper:
+    build:
+      context: ./tipp_scrapping
+      dockerfile: Dockerfile
+    ports:
+      - "8003:8003"
+    env_file: ./tipp_scrapping/.env
+    volumes:
+      - ./tipp_scrapping:/app
+    restart: unless-stopped
+
+  # ── Celery ───────────────────────────────────────────────────────────────────
+  celery-worker:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    working_dir: /app/server
+    command: celery -A celery_app worker --loglevel=info --concurrency=4
+    env_file: ./server/.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes:
+      - ./server:/app/server
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    working_dir: /app/server
+    command: celery -A celery_app beat --loglevel=info
+    env_file: ./server/.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes:
+      - ./server:/app/server
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  flower:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    working_dir: /app/server
+    command: celery -A celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    env_file: ./server/.env
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes:
+      - ./server:/app/server
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Next.js front-ends ───────────────────────────────────────────────────────
+  # node_modules lives in a named volume so npm install only runs once.
+  # Source code is volume-mounted for hot reload.
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    env_file: ./client/.env
+    volumes:
+      - ./client:/app
+      - client-node-modules:/app/node_modules
+    restart: unless-stopped
+
+  admin-portal:
+    build:
+      context: ./admin-portal
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    env_file: ./admin-portal/.env
+    volumes:
+      - ./admin-portal:/app
+      - admin-portal-node-modules:/app/node_modules
+    restart: unless-stopped
+
+  data-pipeline-ui:
+    build:
+      context: ./data_pipeline/frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3002:3001"
+    env_file: ./data_pipeline/frontend/.env
+    volumes:
+      - ./data_pipeline/frontend:/app
+      - data-pipeline-ui-node-modules:/app/node_modules
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  client-node-modules:
+  admin-portal-node-modules:
+  data-pipeline-ui-node-modules:
