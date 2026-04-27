@@ -120,4 +120,4 @@ xxhash==3.6.0
 yarl==1.23.0
 zstandard==0.25.0
 slowapi==0.1.9
-limits==3.13.0
+limits==5.8.0
