@@ -58,7 +58,7 @@ export default function DocumentsPage() {
       setUploading(true);
       setError(null);
 
-      // Step 1: Upload to S3
+      // Upload to S3 — Lambda triggers automatically on upload, job_id is returned immediately
       const formData = new FormData();
       formData.append('file', selectedFile);
 
@@ -74,31 +74,14 @@ export default function DocumentsPage() {
         throw new Error('Upload failed');
       }
 
-      const { s3_key } = await uploadResponse.json();
+      const { s3_key, job_id } = await uploadResponse.json();
 
-      // Step 2: Trigger ingestion
-      const ingestResponse = await fetch(
-        `${api.getBaseURL()}/v1/admin/data-pipeline/ingest?s3_key=${encodeURIComponent(s3_key)}`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${api.getAuthToken()}`,
-          },
-        }
-      );
-
-      if (!ingestResponse.ok) {
-        throw new Error('Ingestion trigger failed');
-      }
-
-      const { job_id, status, message } = await ingestResponse.json();
-
-      // Add job to list and start polling
+      // Add job to list and start polling — Lambda is already processing in the background
       const newJob: Job = {
         job_id,
         s3_key,
-        status,
-        message,
+        status: 'pending',
+        message: 'Queued — Lambda is processing your document.',
       };
 
       setJobs((prev) => [newJob, ...prev]);
