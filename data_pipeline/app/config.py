@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
 
+    # Redis
+    redis_url: str = "redis://redis:6379/3"
+
     # Pipeline tuning — semantic chunking
     # breakpoint_threshold_type: "percentile" | "standard_deviation" | "interquartile"
     # "percentile" with threshold=95 → split only at the 95th-percentile similarity

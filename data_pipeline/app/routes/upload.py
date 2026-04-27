@@ -11,10 +11,11 @@ import uuid
 from pathlib import Path
 
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, HTTPException, UploadFile, status
+from fastapi import APIRouter, HTTPException, Request, UploadFile, status
 
 from app.config import settings
 from app.dependencies import get_s3
+from app.limiter import limiter
 from app.logger import get_logger
 from app.models import UploadResponse
 from app.services.document_parser import SUPPORTED_EXTENSIONS
@@ -32,7 +33,8 @@ UPLOAD_PREFIX = "uploads"
     status_code=status.HTTP_201_CREATED,
     summary="Upload a document to S3",
 )
-async def upload_file(file: UploadFile):
+@limiter.limit("10/hour")
+async def upload_file(request: Request, file: UploadFile):
     """
     Uploads a document to S3 under uploads/{job_id}/{filename}.
     The upload triggers the Lambda ingestion function automatically.

@@ -3,7 +3,9 @@ import random
 import string
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+
+from middleware.rate_limit import limiter
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlmodel import Session, select
 
@@ -54,7 +56,8 @@ def _get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(_be
 
 
 @router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
-def register(body: RegisterRequest, session: Session = Depends(get_session)):
+@limiter.limit("5/hour")
+def register(request: Request, body: RegisterRequest, session: Session = Depends(get_session)):
     email = body.email.lower().strip()
 
     existing = session.exec(select(User).where(User.email_address == email)).first()
@@ -100,7 +103,8 @@ def register(body: RegisterRequest, session: Session = Depends(get_session)):
 
 
 @router.post("/login", response_model=LoginResponse)
-def login(body: LoginRequest, session: Session = Depends(get_session)):
+@limiter.limit("10/minute")
+def login(request: Request, body: LoginRequest, session: Session = Depends(get_session)):
     user = session.exec(select(User).where(User.email_address == body.email.lower().strip())).first()
 
     if not user or not verify_password(body.password, user.password_hash):
@@ -156,7 +160,9 @@ def onboarding(
     response_model=RegisterResponse,
     summary="Verify email OTP to activate a newly registered account",
 )
+@limiter.limit("10/minute")
 def verify_registration(
+    request: Request,
     body: VerifyOtpRequest,
     session: Session = Depends(get_session),
 ):
@@ -247,7 +253,9 @@ def _invalidate_existing_otps(session: Session, email: str) -> None:
     response_model=ForgotPasswordResponse,
     summary="Request a password-reset OTP",
 )
+@limiter.limit("3/hour")
 def forgot_password(
+    request: Request,
     body: ForgotPasswordRequest,
     session: Session = Depends(get_session),
 ):
@@ -317,7 +325,9 @@ def forgot_password(
     response_model=VerifyOtpResponse,
     summary="Verify OTP and receive a password-reset token",
 )
+@limiter.limit("10/minute")
 def verify_otp(
+    request: Request,
     body: VerifyOtpRequest,
     session: Session = Depends(get_session),
 ):
@@ -392,7 +402,9 @@ def verify_otp(
     response_model=ResetPasswordResponse,
     summary="Set a new password using a valid reset token",
 )
+@limiter.limit("5/hour")
 def reset_password(
+    request: Request,
     body: ResetPasswordRequest,
     session: Session = Depends(get_session),
 ):

@@ -23,7 +23,9 @@ import os
 import uuid
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+
+from middleware.rate_limit import get_user_id_or_ip, limiter
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
@@ -529,7 +531,9 @@ class RatingResponse(BaseModel):
 
 
 @router.patch("/messages/{message_id}/rating", response_model=RatingResponse)
+@limiter.limit("60/hour", key_func=get_user_id_or_ip)
 def rate_message(
+    request: Request,
     message_id: int,
     body: RatingRequest,
     user_id: int = Depends(_get_current_user_id),
@@ -565,7 +569,9 @@ def rate_message(
 
 
 @router.post("/chat")
+@limiter.limit("60/hour", key_func=get_user_id_or_ip)
 async def chat(
+    request: Request,
     body: ChatRequest,
     user_id: int = Depends(_get_current_user_id),
 ):

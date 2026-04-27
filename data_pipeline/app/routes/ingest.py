@@ -11,10 +11,11 @@ pipeline-status/{job_id}.json and returns it to the caller.
 import json
 
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 
 from app.config import settings
 from app.dependencies import get_s3
+from app.limiter import limiter
 from app.models import JobStatus, JobStatusResponse
 
 router = APIRouter(prefix="/ingest", tags=["Ingestion"])
@@ -27,7 +28,8 @@ STATUS_PREFIX = "pipeline-status"
     response_model=JobStatusResponse,
     summary="Poll ingestion job status",
 )
-def get_job_status(job_id: str):
+@limiter.limit("120/minute")
+def get_job_status(request: Request, job_id: str):
     """
     Returns the current status of an ingestion job.
     Lambda writes a status file to S3 when it starts and when it finishes.

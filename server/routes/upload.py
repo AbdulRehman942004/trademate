@@ -12,7 +12,9 @@ import io
 import logging
 import os
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+
+from middleware.rate_limit import get_user_id_or_ip, limiter
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
@@ -95,7 +97,9 @@ class UploadResponse(BaseModel):
 
 
 @router.post("/upload", response_model=UploadResponse)
+@limiter.limit("20/hour", key_func=get_user_id_or_ip)
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     user_id: int = Depends(_get_current_user_id),
 ) -> UploadResponse:
