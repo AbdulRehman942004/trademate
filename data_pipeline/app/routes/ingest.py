@@ -1,62 +1,25 @@
 """
-app/routes/ingest.py — Document ingestion endpoints.
+app/routes/ingest.py — Job status endpoint.
 
-POST /ingest        — Submit a document for ingestion (202 Accepted)
-GET  /job/{job_id}  — Poll the status of a submitted job
+GET /ingest/{job_id} — Poll the status of an ingestion job.
+
+Ingestion is now handled by Lambda (triggered automatically when a file is
+uploaded to S3). This endpoint reads the status record that Lambda writes to
+pipeline-status/{job_id}.json and returns it to the caller.
 """
 
-import uuid
-from pathlib import Path
+import json
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from botocore.exceptions import ClientError
+from fastapi import APIRouter, HTTPException, status
 
-from app.models import (
-    IngestRequest,
-    IngestResponse,
-    JobRecord,
-    JobStatus,
-    JobStatusResponse,
-)
-from app.services.document_parser import SUPPORTED_EXTENSIONS
-from app.services.ingestion_pipeline import run_ingestion
+from app.config import settings
+from app.dependencies import get_s3
+from app.models import JobStatus, JobStatusResponse
 
 router = APIRouter(prefix="/ingest", tags=["Ingestion"])
 
-# In-memory job store — swap for Redis or a DB table in production
-_jobs: dict[str, JobRecord] = {}
-
-
-@router.post(
-    "",
-    response_model=IngestResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-    summary="Submit a document for ingestion",
-)
-def ingest(payload: IngestRequest, background_tasks: BackgroundTasks):
-    """
-    Accepts an S3 key, returns a job_id immediately (202), and runs the
-    full pipeline (download → parse → chunk → embed → upsert) in the background.
-
-    Poll **GET /ingest/{job_id}** to track progress.
-    """
-    ext = Path(payload.s3_key).suffix.lower()
-    if ext not in SUPPORTED_EXTENSIONS:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Unsupported file type '{ext}'. Supported: {sorted(SUPPORTED_EXTENSIONS)}",
-        )
-
-    job_id = str(uuid.uuid4())
-    job = JobRecord(job_id=job_id, s3_key=payload.s3_key)
-    _jobs[job_id] = job
-
-    background_tasks.add_task(run_ingestion, job)
-
-    return IngestResponse(
-        job_id=job_id,
-        status=JobStatus.PENDING,
-        message="Ingestion job accepted and queued.",
-    )
+STATUS_PREFIX = "pipeline-status"
 
 
 @router.get(
@@ -65,11 +28,26 @@ def ingest(payload: IngestRequest, background_tasks: BackgroundTasks):
     summary="Poll ingestion job status",
 )
 def get_job_status(job_id: str):
-    """Returns the current status and result of an ingestion job."""
-    job = _jobs.get(job_id)
-    if not job:
+    """
+    Returns the current status of an ingestion job.
+    Lambda writes a status file to S3 when it starts and when it finishes.
+    If the file doesn't exist yet, the job is still queued.
+    """
+    s3_key = f"{STATUS_PREFIX}/{job_id}.json"
+    try:
+        obj = get_s3().get_object(Bucket=settings.aws_s3_bucket_name, Key=s3_key)
+        data = json.loads(obj["Body"].read())
+        return JobStatusResponse(**data)
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "NoSuchKey":
+            return JobStatusResponse(
+                job_id=job_id,
+                s3_key="",
+                status=JobStatus.PENDING,
+                message="Job is queued — Lambda has not started processing yet.",
+                chunks_upserted=0,
+            )
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Job '{job_id}' not found.",
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Could not read job status from S3: {exc}",
         )
-    return job

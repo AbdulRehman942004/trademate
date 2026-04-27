@@ -1,0 +1,50 @@
+service: trademate-ingestion-pipeline
+
+provider:
+  name: aws
+  region: ap-south-1
+  architecture: arm64
+  profile: zygotrix
+  stage: ${opt:stage, 'dev'}
+  timeout: 900      # 15 min max — handles large documents
+  memorySize: 2048  # Document parsing + embedding is memory-heavy
+  ecr:
+    images:
+      ingestion-img:
+        path: ./
+        file: Dockerfile.lambda
+  iam:
+    role:
+      statements:
+        # Read uploaded documents
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+          Resource:
+            - arn:aws:s3:::${env:AWS_S3_BUCKET_NAME}/uploads/*
+        # Write job status files
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:GetObject
+          Resource:
+            - arn:aws:s3:::${env:AWS_S3_BUCKET_NAME}/pipeline-status/*
+  environment:
+    AWS_S3_BUCKET_NAME: ${env:AWS_S3_BUCKET_NAME}
+    PINECONE_API_KEY: ${env:PINECONE_API_KEY}
+    OPENAI_API_KEY: ${env:OPENAI_API_KEY}
+
+functions:
+  ingestion:
+    name: ${self:service}-${self:provider.stage}-ingestion
+    image:
+      name: ingestion-img
+    description: "Ingests uploaded documents into Pinecone (TradeMate)"
+    events:
+      # Fires automatically when any file lands under uploads/ in the bucket
+      - s3:
+          bucket: ${env:AWS_S3_BUCKET_NAME}
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: uploads/
+          existing: true  # Bucket already exists — do not create a new one

@@ -1,8 +1,10 @@
 """
 server/routes/data_pipeline.py — Data Pipeline Admin API
 
-Proxies requests to the data pipeline backend and provides admin controls
-for document ingestion, research pipeline, and UN Comtrade data management.
+Upload flow:
+  POST /upload  → data pipeline saves file to S3 (uploads/{job_id}/filename)
+                  S3 ObjectCreated event triggers Lambda automatically
+  GET  /job/{job_id} → polls pipeline-status/{job_id}.json written by Lambda
 """
 
 import os
@@ -10,7 +12,7 @@ import os
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
-from typing import Any, Optional
+from typing import Optional
 
 from routes.admin import _get_current_admin_user_id
 
@@ -31,14 +33,9 @@ class HealthResponse(BaseModel):
 
 class UploadResponse(BaseModel):
     s3_key: str
+    job_id: str
     filename: str
     size_bytes: int
-
-
-class IngestResponse(BaseModel):
-    job_id: str
-    status: str
-    message: str
 
 
 class JobStatusResponse(BaseModel):
@@ -112,30 +109,6 @@ async def upload_document(
                 detail=f"Upload failed: {exc}",
             )
 
-
-@router.post("/ingest", response_model=IngestResponse)
-async def trigger_ingestion(
-    s3_key: str,
-    admin_id: int = Depends(_get_current_admin_user_id),
-):
-    """
-    Trigger document ingestion pipeline for an S3 key.
-    Returns a job_id to poll for status.
-    """
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                f"{DATA_PIPELINE_BASE_URL}/ingest",
-                json={"s3_key": s3_key},
-                timeout=10.0,
-            )
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPError as exc:
-            raise HTTPException(
-                status_code=exc.response.status_code if hasattr(exc, "response") else 500,
-                detail=f"Ingestion request failed: {exc}",
-            )
 
 
 @router.get("/job/{job_id}", response_model=JobStatusResponse)
