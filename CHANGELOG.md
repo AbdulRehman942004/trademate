@@ -1,8 +1,8 @@
 # CHANGELOG
 
-### v6.8.0 - 04/29/2026
+### v6.8.0 - 04/28/2026
 #### Added 
-- **Marketing Portal:**
+- **Marketing Site:**
   - Implemented Landing Page
   - Implemented Feature Page
   - Implemented About Page
@@ -10,7 +10,9 @@
   - Implemented Request Demo Form 
   - Added Navbar
   - Added Footer
-
+#### Changes
+ - Marketing site is now live at [IntelloTrade](https://www.intellotrade.com/)
+- Marketing site deployed on Vercel and then linked to custom domain [IntelloTrade](https://www.intellotrade.com/)
 
 ### v6.7.0 - 04/28/2026
 - Added Web Search Tool 
