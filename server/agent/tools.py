@@ -119,47 +119,62 @@ WITH hs, score,
      coalesce(hs.code, hs.hts_code)          AS code,
      coalesce(hs.full_label, hs.full_path_description) AS full_label
 
-// PK-only: tariff, cess, exemption, procedure relationships
-OPTIONAL MATCH (hs)-[:HAS_TARIFF]->(t:Tariff)
-OPTIONAL MATCH (hs)-[:HAS_CESS]->(c:Cess)
-OPTIONAL MATCH (hs)-[:HAS_EXEMPTION]->(ex:Exemption)
-OPTIONAL MATCH (hs)-[:REQUIRES_PROCEDURE]->(pr:Procedure)
-
 // US-only: walk up the HAS_CHILD tree to find the parent (indent - 1)
 OPTIONAL MATCH (parent:HSCode:US)-[:HAS_CHILD]->(hs)
+
+// Each branch is collapsed to a single list before the next OPTIONAL MATCH
+// so the result rows don't explode into a Cartesian product of all four
+// PK relationships when an HS code is densely connected.
+WITH hs, score, source, code, full_label, parent
+OPTIONAL MATCH (hs)-[:HAS_TARIFF]->(t:Tariff)
+WITH hs, score, source, code, full_label, parent,
+     [x IN collect(DISTINCT {{type: t.duty_type, name: t.duty_name, rate: t.rate}})
+        WHERE x.type IS NOT NULL] AS tariffs
+
+OPTIONAL MATCH (hs)-[:HAS_CESS]->(c:Cess)
+WITH hs, score, source, code, full_label, parent, tariffs,
+     [x IN collect(DISTINCT {{province: c.province, import_rate: c.import_rate, export_rate: c.export_rate}})
+        WHERE x.province IS NOT NULL] AS cess
+
+OPTIONAL MATCH (hs)-[:HAS_EXEMPTION]->(ex:Exemption)
+WITH hs, score, source, code, full_label, parent, tariffs, cess,
+     [x IN collect(DISTINCT {{description: ex.exemption_desc, rate: ex.rate}})
+        WHERE x.description IS NOT NULL] AS exemptions
+
+OPTIONAL MATCH (hs)-[:REQUIRES_PROCEDURE]->(pr:Procedure)
+WITH hs, score, source, code, full_label, parent, tariffs, cess, exemptions,
+     [x IN collect(DISTINCT {{name: pr.name, category: pr.category, description: pr.description}})
+        WHERE x.name IS NOT NULL] AS procedures
+
+OPTIONAL MATCH (hs)-[:HAS_ANTI_DUMPING]->(ad:AntiDumpingDuty)
+WITH hs, score, source, code, full_label, parent, tariffs, cess, exemptions, procedures,
+     [x IN collect(DISTINCT {{exporter: ad.exporter, rate: ad.rate, valid_from: ad.valid_from, valid_to: ad.valid_to}})
+        WHERE x.rate IS NOT NULL OR x.exporter IS NOT NULL] AS anti_dumping
+
+OPTIONAL MATCH (hs)-[:HAS_MEASURE]->(m:Measure)
+WITH hs, score, source, code, full_label, parent, tariffs, cess, exemptions, procedures, anti_dumping,
+     [x IN collect(DISTINCT {{name: m.name, type: m.type, agency: m.agency, description: m.description, law: m.law}})
+        WHERE x.name IS NOT NULL] AS measures
 
 RETURN
     source,
     code,
-    hs.description                AS description,
+    hs.description                   AS description,
     full_label,
     score,
-    hs.general_rate               AS us_general_rate,
-    hs.special_rate               AS us_special_rate,
-    hs.column_2_rate              AS us_column2_rate,
-    hs.unit                       AS us_unit,
-    hs.indent                     AS us_indent,
-    coalesce(parent.hts_code, '') AS us_parent_code,
+    hs.general_rate                  AS us_general_rate,
+    hs.special_rate                  AS us_special_rate,
+    hs.column_2_rate                 AS us_column2_rate,
+    hs.unit                          AS us_unit,
+    hs.indent                        AS us_indent,
+    coalesce(parent.hts_code, '')    AS us_parent_code,
     coalesce(parent.description, '') AS us_parent_desc,
-    collect(DISTINCT {{
-        type: t.duty_type,
-        name: t.duty_name,
-        rate: t.rate
-    }})  AS tariffs,
-    collect(DISTINCT {{
-        province:     c.province,
-        import_rate:  c.import_rate,
-        export_rate:  c.export_rate
-    }})  AS cess,
-    collect(DISTINCT {{
-        description: ex.exemption_desc,
-        rate:        ex.rate
-    }})  AS exemptions,
-    collect(DISTINCT {{
-        name:        pr.name,
-        category:    pr.category,
-        description: pr.description
-    }})  AS procedures
+    tariffs,
+    cess,
+    exemptions,
+    procedures,
+    anti_dumping,
+    measures
 ORDER BY score DESC
 """
 
@@ -193,19 +208,22 @@ def _format_record(record: dict) -> str:
             lines.append(f"Column 2 Rate of Duty : {record['us_column2_rate']}")
 
     else:
-        # PK node — show tariff, cess, exemptions, procedures
+        # PK node — show tariff, cess, exemptions, procedures, anti-dumping, measures
         valid_tariffs = [t for t in (record.get("tariffs") or []) if t.get("type")]
         if valid_tariffs:
             lines.append("Tariffs:")
             for t in valid_tariffs:
-                lines.append(f"  • {t['name']} ({t['type']}): {t['rate']}")
+                # Display "ST (VAT)" as "ST" to match the system-prompt rate table.
+                display_type = "ST" if t.get("type") == "ST (VAT)" else t.get("type", "")
+                lines.append(f"  • {t.get('name', '')} ({display_type}): {t.get('rate', 'N/A')}")
 
         valid_cess = [c for c in (record.get("cess") or []) if c.get("province")]
         if valid_cess:
             lines.append("Cess Collection (up to 5 provinces):")
             for c in valid_cess[:5]:
                 lines.append(
-                    f"  • {c['province']} — Import: {c['import_rate']}, Export: {c['export_rate']}"
+                    f"  • {c['province']} — Import: {c.get('import_rate', 'N/A')}, "
+                    f"Export: {c.get('export_rate', 'N/A')}"
                 )
 
         valid_ex = [e for e in (record.get("exemptions") or []) if e.get("description")]
@@ -221,6 +239,25 @@ def _format_record(record: dict) -> str:
             for p in valid_pr[:3]:
                 cat = f" [{p['category']}]" if p.get("category") else ""
                 lines.append(f"  • {p['name']}{cat}")
+
+        valid_ad = [
+            a for a in (record.get("anti_dumping") or [])
+            if a.get("rate") or a.get("exporter")
+        ]
+        if valid_ad:
+            lines.append("Anti-Dumping Duties:")
+            for a in valid_ad[:5]:
+                exporter = a.get("exporter") or "All exporters"
+                rate = a.get("rate") or "N/A"
+                lines.append(f"  • {exporter}: {rate}")
+
+        valid_m = [m for m in (record.get("measures") or []) if m.get("name")]
+        if valid_m:
+            lines.append("Trade Measures (NTMs):")
+            for m in valid_m[:5]:
+                m_type = f" [{m['type']}]" if m.get("type") else ""
+                agency = f" — {m['agency']}" if m.get("agency") else ""
+                lines.append(f"  • {m['name']}{m_type}{agency}")
 
     return "\n".join(lines)
 

@@ -233,7 +233,7 @@ def test_llm_response_cites_graph_hs_code():
     assert context_hs_codes, "Retrieval returned no HS codes — cannot verify grounding."
 
     llm = ChatOpenAI(
-        model="gpt-5.4",
+        model=os.getenv("BOT_LLM_MODEL", "gpt-4o"),
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         temperature=0,
     )
@@ -277,7 +277,7 @@ def test_llm_refuses_to_hallucinate_on_empty_context():
     # Context should be empty or irrelevant; we proceed either way.
 
     llm = ChatOpenAI(
-        model="gpt-5.4",
+        model=os.getenv("BOT_LLM_MODEL", "gpt-4o"),
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         temperature=0,
     )

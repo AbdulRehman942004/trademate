@@ -514,8 +514,9 @@ def get_chatbot_config(
     # For now, return hardcoded defaults
     logger.info("[ADMIN] Chatbot config requested by admin_id=%d", admin_id)
 
+    from agent.bot import BOT_LLM_MODEL
     return ChatbotConfigResponse(
-        llm_model="gpt-5.4",
+        llm_model=BOT_LLM_MODEL,
         temperature=0.7,
         max_tokens=2048,
         top_p=0.9,
@@ -548,8 +549,9 @@ def update_chatbot_config(
 
     # For now, just return the current config
     # In production, you'd update the config and reload it
+    from agent.bot import BOT_LLM_MODEL
     return ChatbotConfigResponse(
-        llm_model=body.llm_model or "gpt-5.4",
+        llm_model=body.llm_model or BOT_LLM_MODEL,
         temperature=body.temperature if body.temperature is not None else 0.7,
         max_tokens=body.max_tokens or 2048,
         top_p=body.top_p if body.top_p is not None else 0.9,
