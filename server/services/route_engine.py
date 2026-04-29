@@ -1,10 +1,9 @@
 """
 services/route_engine.py — Trade Route Evaluation Engine
 
-Evaluates all viable shipping routes for a given cargo request, in EITHER
-direction:
-  • PK_TO_US — Pakistan → USA  (data: data/pk_usa_routes.json)
-  • US_TO_PK — USA → Pakistan  (data: data/us_pk_routes.json)
+Evaluates all viable shipping routes for a given cargo request.
+Currently supports PK_TO_US (Pakistan → USA) direction.
+Data source: data/pk_usa_routes.json
 
 Algorithm (per request):
   1. Pick the route graph for req.direction
@@ -48,7 +47,6 @@ logger = logging.getLogger(__name__)
 _DATA_DIR = Path(__file__).parent.parent / "data"
 
 _PK_TO_US_PATH = _DATA_DIR / "pk_usa_routes.json"
-_US_TO_PK_PATH = _DATA_DIR / "us_pk_routes.json"
 
 
 @dataclass(frozen=True)
@@ -99,21 +97,6 @@ _PK_AIR_GATEWAY: dict[str, tuple[str, str]] = {
     "Multan":     ("LHE", "Lahore"),
 }
 
-# US air-gateway mapping — for US_TO_PK: where the user's US origin city
-# trucks to.
-_US_AIR_GATEWAY: dict[str, tuple[str, str]] = {
-    "New York":     ("JFK", "JFK"),
-    "Los Angeles":  ("LAX", "LAX"),
-    "Long Beach":   ("LAX", "LAX"),
-    "Chicago":      ("ORD", "ORD"),
-    "Miami":        ("MIA", "MIA"),
-    "Atlanta":      ("ATL", "ATL"),
-    "Houston":      ("IAH", "IAH"),
-    "Dallas":       ("DFW", "DFW"),
-    "Seattle":      ("SEA", "SEA"),
-    "Savannah":     ("ATL", "ATL"),  # SAV cargo is light; trucks to ATL
-}
-
 _US_CITY_NAMES = [
     "New York", "Los Angeles", "Long Beach", "Chicago",
     "Miami", "Savannah", "Seattle", "Baltimore",
@@ -131,12 +114,6 @@ _GRAPHS: dict[RouteDirection, _RouteGraph] = {
         air_gateway_by_origin=_PK_AIR_GATEWAY,
         origin_cities_in_names=_PK_CITY_NAMES,
         destination_cities_in_names=_US_CITY_NAMES,
-    ),
-    "US_TO_PK": _load_graph(
-        _US_TO_PK_PATH, "US_TO_PK",
-        air_gateway_by_origin=_US_AIR_GATEWAY,
-        origin_cities_in_names=_US_CITY_NAMES,
-        destination_cities_in_names=_PK_CITY_NAMES,
     ),
 }
 
@@ -159,7 +136,9 @@ def get_options(direction: RouteDirection = "PK_TO_US") -> dict:
 
     Used by /v1/routes/options to populate the route-evaluation form.
     """
-    g = _GRAPHS[direction]
+    g = _GRAPHS.get(direction)
+    if g is None:
+        raise ValueError(f"Direction '{direction}' is not supported. Supported: {list(_GRAPHS.keys())}")
     return {
         "direction": direction,
         "origin_cities": sorted(g.inland_origins.keys()),
@@ -514,7 +493,12 @@ def evaluate_routes(
     message_id: Optional[int] = None,
 ) -> RouteEvaluationResponse:
     # Pick the active graph based on the requested direction
-    graph = _GRAPHS[req.direction]
+    graph = _GRAPHS.get(req.direction)
+    if graph is None:
+        supported = list(_GRAPHS.keys())
+        raise ValueError(
+            f"Direction '{req.direction}' is not supported. Supported: {supported}"
+        )
 
     # Validate origin
     inland = graph.inland_origins.get(req.origin_city)
