@@ -1,16 +1,16 @@
 # CHANGELOG
 
-### v6.8.0 -04/28/2026
+### v8.1.0 4/29/2026
 
 #### Updated
 - Made changes in the admin portal so that all the harcoded features now work. Also added a module in admin portal named token economy.
 
-### v6.7.1 -04/28/2026
+### v7.0.0 28/2026
 
 #### Updated
  - Changed System Instructions and cypher query generation mechanism to extract the correct HS code related information.
 
-### v6.7.0 - 04/28/2026
+### v6.9.0 04/28/2026
 + Added Web Search Tool 
 + US to Pak Route Added 
 +### v6.6.0 - 04/23/2026
