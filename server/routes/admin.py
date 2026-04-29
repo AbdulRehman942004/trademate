@@ -691,6 +691,9 @@ def update_chatbot_config(
     session.commit()
     session.refresh(cfg)
 
+    from agent.bot import clear_agent_cache
+    clear_agent_cache()
+
     return _chatbot_config_to_response(cfg)
 
 

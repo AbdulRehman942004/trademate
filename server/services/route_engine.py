@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 _DATA_DIR = Path(__file__).parent.parent / "data"
 
 _PK_TO_US_PATH = _DATA_DIR / "pk_usa_routes.json"
+_US_TO_PK_PATH = _DATA_DIR / "us_pk_routes.json"
 
 
 @dataclass(frozen=True)
@@ -100,12 +101,28 @@ _PK_AIR_GATEWAY: dict[str, tuple[str, str]] = {
 _US_CITY_NAMES = [
     "New York", "Los Angeles", "Long Beach", "Chicago",
     "Miami", "Savannah", "Seattle", "Baltimore",
+    "Houston", "Dallas", "Atlanta",
     "US Both Coasts",
 ]
 _PK_CITY_NAMES = [
     "Karachi", "Lahore", "Sialkot", "Islamabad",
     "Faisalabad", "Multan", "Peshawar",
 ]
+
+# US air-gateway mapping — for US_TO_PK: where the US origin city ships air cargo from.
+_US_AIR_GATEWAY: dict[str, tuple[str, str]] = {
+    "Los Angeles":  ("USLAX", "Los Angeles"),
+    "Long Beach":   ("USLAX", "Los Angeles"),   # LGB cargo routes through LAX
+    "New York":     ("USJFK", "New York"),
+    "Chicago":      ("USORD", "Chicago"),
+    "Miami":        ("USMIA", "Miami"),
+    "Savannah":     ("USATL", "Atlanta"),        # SAV air cargo trucks to ATL
+    "Seattle":      ("USSEA", "Seattle"),
+    "Houston":      ("USIAH", "Houston"),
+    "Dallas":       ("USDFW", "Dallas"),
+    "Atlanta":      ("USATL", "Atlanta"),
+    "Baltimore":    ("USBWI", "Baltimore"),
+}
 
 
 _GRAPHS: dict[RouteDirection, _RouteGraph] = {
@@ -114,6 +131,12 @@ _GRAPHS: dict[RouteDirection, _RouteGraph] = {
         air_gateway_by_origin=_PK_AIR_GATEWAY,
         origin_cities_in_names=_PK_CITY_NAMES,
         destination_cities_in_names=_US_CITY_NAMES,
+    ),
+    "US_TO_PK": _load_graph(
+        _US_TO_PK_PATH, "US_TO_PK",
+        air_gateway_by_origin=_US_AIR_GATEWAY,
+        origin_cities_in_names=_US_CITY_NAMES,
+        destination_cities_in_names=_PK_CITY_NAMES,
     ),
 }
 

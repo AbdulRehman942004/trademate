@@ -620,12 +620,18 @@ def _pk_code_lookup(code: str) -> list[dict]:
 _PK_TEXT_CYPHER = """
 MATCH (hs:HSCode:PK)
 WHERE hs.description IS NOT NULL
-  AND (toLower(hs.description) CONTAINS toLower($keyword)
-       OR (hs.full_label IS NOT NULL AND toLower(hs.full_label) CONTAINS toLower($keyword)))
+  AND (
+    toLower(hs.description) CONTAINS toLower($keyword)
+    OR replace(toLower(hs.description), ' ', '') CONTAINS replace(toLower($keyword), ' ', '')
+    OR (hs.full_label IS NOT NULL AND toLower(hs.full_label) CONTAINS toLower($keyword))
+    OR (hs.full_label IS NOT NULL AND replace(toLower(hs.full_label), ' ', '') CONTAINS replace(toLower($keyword), ' ', ''))
+  )
 WITH hs,
      CASE WHEN toLower(hs.description) STARTS WITH toLower($keyword) THEN 0
           WHEN toLower(hs.description) CONTAINS toLower($keyword) THEN 1
-          ELSE 2 END AS relevance
+          WHEN replace(toLower(hs.description), ' ', '') CONTAINS replace(toLower($keyword), ' ', '') THEN 2
+          ELSE 3 END AS rel
+WITH hs, min(rel) AS relevance
 ORDER BY relevance ASC
 LIMIT $top_k
 
@@ -758,8 +764,12 @@ def _text_search_pk(query: str, top_k: int = _VECTOR_TOP_K) -> list[dict]:
         if records:
             return records
 
-    # Full-phrase match failed — try each significant word individually, return first hit
-    words = [w for w in query.lower().split() if len(w) > 2 and w not in _STOPWORDS]
+    # Full-phrase match failed — try each significant word individually, longest first
+    # (longest = most specific: "notebooks" before "paper", "textiles" before "raw")
+    words = sorted(
+        [w for w in query.lower().split() if len(w) > 3 and w not in _STOPWORDS],
+        key=len, reverse=True,
+    )
     for word in words:
         with _read_session() as session:
             records = session.run(_PK_TEXT_CYPHER, keyword=word, top_k=top_k).data()
@@ -969,7 +979,7 @@ def search_pakistan_hs_data(query: str) -> str:
             logger.info("━━━ [MEMGRAPH → PK] Vector search: %r", query[:80])
             records = _pk_vector_search(query)
 
-            # Retry with trade-terminology expansion if first pass returned nothing
+            # Retry with trade-terminology expansion only when nothing was found
             if not records:
                 logger.info("━━━ [MEMGRAPH → PK] No results — retrying with expanded trade query.")
                 expanded = _expand_query(query)
@@ -977,8 +987,13 @@ def search_pakistan_hs_data(query: str) -> str:
                     records = _pk_vector_search(expanded)
 
         if records:
+            # Deduplicate by code — Memgraph OPTIONAL MATCH joins can produce multiple
+            # rows per node when tariff/cess/exemption counts differ across expansions.
+            seen: set[str] = set()
+            records = [r for r in records if r.get("code") not in seen and not seen.add(r.get("code"))]  # type: ignore[func-returns-value]
+
             logger.info("━━━ [MEMGRAPH → PK ✔] Returned %d record(s) from Graph DB (Pakistan PCT).", len(records))
-            
+
             # Log interaction
             ctx = request_ctx.get({})
             if ctx.get("user_id"):
@@ -1048,7 +1063,7 @@ def search_us_hs_data(query: str) -> str:
             logger.info("━━━ [MEMGRAPH → US] Vector search: %r", query[:80])
             records = _us_vector_search(query)
 
-            # Retry with trade-terminology expansion if first pass returned nothing
+            # Retry with trade-terminology expansion only when nothing was found
             if not records:
                 logger.info("━━━ [MEMGRAPH → US] No results — retrying with expanded trade query.")
                 expanded = _expand_query(query)
@@ -1056,8 +1071,11 @@ def search_us_hs_data(query: str) -> str:
                     records = _us_vector_search(expanded)
 
         if records:
+            seen_us: set[str] = set()
+            records = [r for r in records if r.get("hts_code") not in seen_us and not seen_us.add(r.get("hts_code"))]  # type: ignore[func-returns-value]
+
             logger.info("━━━ [MEMGRAPH → US ✔] Returned %d record(s) from Graph DB (US HTS).", len(records))
-            
+
             # Log interaction
             ctx = request_ctx.get({})
             if ctx.get("user_id"):

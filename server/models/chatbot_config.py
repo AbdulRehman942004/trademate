@@ -12,7 +12,7 @@ class ChatbotConfig(SQLModel, table=True):
     max_tokens: int = Field(default=2048)
     top_p: float = Field(default=0.9)
     available_tools: str = Field(
-        default="search_pakistan_hs_data,search_us_hs_data,search_trade_documents,evaluate_shipping_routes"
+        default="search_pakistan_hs_data,search_us_hs_data,search_trade_documents,evaluate_shipping_routes,web_search_trade"
     )
     router_enabled: bool = Field(default=True)
     max_tool_calls: int = Field(default=5)

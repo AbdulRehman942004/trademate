@@ -128,6 +128,17 @@ const TOOL_DEFINITIONS: Omit<Tool, 'enabled'>[] = [
       { name: 'source', type: 'string', required: false, description: 'PK or US', default: 'PK' },
     ],
   },
+  {
+    id: 'web_search_trade',
+    name: 'Live Web Search',
+    description: 'Real-time web search via Anthropic for current trade news, third-country tariffs, and live supplier data',
+    category: 'search',
+    icon: Globe,
+    apiEndpoint: 'Anthropic web_search_20250305',
+    parameters: [
+      { name: 'query', type: 'string', required: true, description: 'Search query for live web results' },
+    ],
+  },
 ];
 
 export default function ChatbotToolsPage() {
