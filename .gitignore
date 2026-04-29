@@ -15,3 +15,7 @@ data
 .claude
 
 server/celerybeat-schedule
+
+docs
+
+node_modules

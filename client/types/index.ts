@@ -36,11 +36,6 @@ export interface Conversation {
   updatedAt: Date;
 }
 
-export interface Model {
-  id: string;
-  name: string;
-  description: string;
-}
 
 export type SendMessagePayload = {
   conversationId: string;

@@ -12,7 +12,6 @@ import {
   Shield,
   FileText,
   Workflow,
-  TrendingUp,
   GitBranch,
   Search,
 } from 'lucide-react';
@@ -65,11 +64,6 @@ export const NAV_ITEMS: NavItem[] = [
         title: 'Documents',
         href: '/data-pipeline/documents',
         icon: FileText,
-      },
-      {
-        title: 'Research',
-        href: '/data-pipeline/research',
-        icon: TrendingUp,
       },
     ],
   },

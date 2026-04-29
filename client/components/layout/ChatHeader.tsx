@@ -12,7 +12,6 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { ModelSelector } from "@/components/ui/ModelSelector";
 import { IconButton } from "@/components/ui/IconButton";
 import { useUIStore } from "@/stores/uiStore";
 import { useChatStore } from "@/stores/chatStore";
@@ -136,7 +135,6 @@ export function ChatHeader() {
           >
             <Menu size={18} />
           </button>
-          <ModelSelector />
         </div>
 
         <div className="flex items-center gap-1">

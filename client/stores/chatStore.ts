@@ -10,7 +10,6 @@ interface ChatState {
   conversations: Conversation[];
   activeConversationId: string | null;
   isStreaming: boolean;
-  selectedModelId: string;
 
   // Actions
   createConversation: () => string;
@@ -22,7 +21,6 @@ interface ChatState {
   setLastAssistantMessageDbId: (conversationId: string, dbId: number) => void;
   setMessageRating: (conversationId: string, dbId: number, rating: number) => void;
   setStreaming: (value: boolean) => void;
-  setSelectedModel: (modelId: string) => void;
   getActiveConversation: () => Conversation | undefined;
   renameConversation: (id: string, title: string) => void;
   setConversationTitle: (id: string, title: string) => void;
@@ -39,7 +37,6 @@ export const useChatStore = create<ChatState>()(
       conversations: [],
       activeConversationId: null,
       isStreaming: false,
-      selectedModelId: "trademate-pro",
 
       createConversation: () => {
         const id = generateId();
@@ -162,8 +159,6 @@ export const useChatStore = create<ChatState>()(
       },
 
       setStreaming: (value) => set({ isStreaming: value }),
-
-      setSelectedModel: (modelId) => set({ selectedModelId: modelId }),
 
       getActiveConversation: () => {
         const { conversations, activeConversationId } = get();

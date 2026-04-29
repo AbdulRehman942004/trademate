@@ -3,12 +3,12 @@
 /**
  * Data Pipeline Dashboard
  *
- * Overview of document ingestion, research pipeline, and vector store status
+ * Overview of document ingestion and vector store status
  */
 
 import * as React from 'react';
 import { DashboardLayout } from '../components/dashboard-layout';
-import { Database, FileText, TrendingUp, Activity, AlertCircle, CheckCircle, Clock, Upload } from 'lucide-react';
+import { Database, FileText, Activity, AlertCircle, CheckCircle, Upload } from 'lucide-react';
 import { cn } from '../utils/cn';
 import api from '../services/api';
 import Link from 'next/link';
@@ -23,9 +23,7 @@ interface HealthStatus {
 interface PipelineStats {
   total_documents_ingested: number;
   total_vectors_in_pinecone: number;
-  total_research_runs: number;
   last_ingestion_time: string | null;
-  last_research_time: string | null;
   s3_storage_used_bytes: number | null;
 }
 
@@ -101,7 +99,7 @@ export default function DataPipelinePage() {
             Data Pipeline
           </h1>
           <p className="mt-2 text-gray-600 dark:text-gray-400">
-            Document ingestion, research pipeline, and vector store management
+            Document ingestion and vector store management
           </p>
         </div>
 
@@ -223,24 +221,7 @@ export default function DataPipelinePage() {
               </p>
             </div>
 
-            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 border border-gray-200 dark:border-gray-700">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">Research Runs</p>
-                  <p className="text-3xl font-bold text-gray-900 dark:text-gray-100 mt-2">
-                    {stats.total_research_runs.toLocaleString()}
-                  </p>
-                </div>
-                <div className="p-3 bg-green-100 dark:bg-green-900/30 rounded-lg">
-                  <TrendingUp className="h-6 w-6 text-green-600 dark:text-green-400" />
-                </div>
-              </div>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                Last: {formatTimestamp(stats.last_research_time)}
-              </p>
-            </div>
-
-            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 border border-gray-200 dark:border-gray-700 md:col-span-2 lg:col-span-3">
+            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 border border-gray-200 dark:border-gray-700 md:col-span-2 lg:col-span-2">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-gray-600 dark:text-gray-400">S3 Storage Used</p>
@@ -253,7 +234,7 @@ export default function DataPipelinePage() {
                 </div>
               </div>
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                Documents and research results stored in S3
+                Documents stored in S3
               </p>
             </div>
           </div>
@@ -264,7 +245,7 @@ export default function DataPipelinePage() {
           <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">
             Quick Actions
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4">
             <Link
               href="/data-pipeline/documents"
               className="flex items-center gap-3 p-4 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
@@ -276,21 +257,6 @@ export default function DataPipelinePage() {
                 </p>
                 <p className="text-sm text-gray-600 dark:text-gray-400">
                   Upload and ingest documents
-                </p>
-              </div>
-            </Link>
-
-            <Link
-              href="/data-pipeline/research"
-              className="flex items-center gap-3 p-4 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-            >
-              <TrendingUp className="h-5 w-5 text-green-600 dark:text-green-400" />
-              <div>
-                <p className="font-medium text-gray-900 dark:text-gray-100">
-                  Research Pipeline
-                </p>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Trigger news & trade data research
                 </p>
               </div>
             </Link>
