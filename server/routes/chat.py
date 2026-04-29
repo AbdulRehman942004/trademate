@@ -47,8 +47,8 @@ _bearer = HTTPBearer()
 # ── Token tracking ─────────────────────────────────────────────────────────────
 
 _MODEL_PRICING: dict[str, dict[str, float]] = {
-    "gpt-4o":          {"prompt": 5.00,  "completion": 15.00},
-    "gpt-4o-mini":     {"prompt": 0.15,  "completion": 0.60},
+    "gpt-5.4":          {"prompt": 5.00,  "completion": 15.00},
+    "gpt-5.4-mini":     {"prompt": 0.15,  "completion": 0.60},
     "gpt-4-turbo":     {"prompt": 10.00, "completion": 30.00},
     "gpt-4":           {"prompt": 30.00, "completion": 60.00},
     "gpt-3.5-turbo":   {"prompt": 0.50,  "completion": 1.50},
@@ -72,7 +72,7 @@ def _count_tokens(text: str, model: str) -> int:
 
 
 def _calc_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    pricing = _MODEL_PRICING.get(model, _MODEL_PRICING["gpt-4o"])
+    pricing = _MODEL_PRICING.get(model, _MODEL_PRICING["gpt-5.4"])
     return (prompt_tokens * pricing["prompt"] + completion_tokens * pricing["completion"]) / 1_000_000
 
 
@@ -220,6 +220,10 @@ def _get_title_llm() -> ChatOpenAI:
             temperature=0.3,
             streaming=False,
             openai_api_key=api_key,
+        )
+        logger.info(
+            "━━━━━━━━━━━━━━ [OPENAI MODEL] %s  (title LLM — chat.py _get_title_llm) ━━━━━━━━━━━━━━",
+            BOT_LLM_MODEL,
         )
     return _title_llm
 

@@ -28,7 +28,7 @@ const steps = [
     subtitle: "LangGraph classifies and selects tools",
     description:
       "The LangGraph state machine classifies your intent and determines which tools to invoke — Knowledge Graph for structured tariff data, Pinecone for regulatory documents, Freightos for live rates. Multiple tools run concurrently.",
-    detail: "Under the hood: GPT-4o reads your query and the conversation context, then constructs a tool call plan. Tool selection is deterministic — no hallucination of data.",
+    detail: "Under the hood: gpt-5.4 reads your query and the conversation context, then constructs a tool call plan. Tool selection is deterministic — no hallucination of data.",
     accent: "#a78bfa",
     accentBg: "rgba(139,92,246,0.1)",
     accentBorder: "rgba(139,92,246,0.2)",
@@ -49,7 +49,7 @@ const steps = [
     title: "Answer Delivered",
     subtitle: "Streamed, cited, and actionable",
     description:
-      "GPT-4o synthesizes the retrieved data into a clear, cited answer that streams token-by-token. Complex responses render rich widgets: route cost breakdowns, HS code tables, tariff comparisons — directly in the chat.",
+      "gpt-5.4 synthesizes the retrieved data into a clear, cited answer that streams token-by-token. Complex responses render rich widgets: route cost breakdowns, HS code tables, tariff comparisons — directly in the chat.",
     detail: "Average end-to-end response time including live rate fetching: under 3 seconds. Every answer references its data source.",
     accent: "#fb923c",
     accentBg: "rgba(249,115,22,0.1)",
@@ -59,7 +59,7 @@ const steps = [
 
 // ── Tech stack rows ────────────────────────────────────────────────────────
 const techStack = [
-  { layer: "AI Orchestration", tech: "LangGraph StateGraph + GPT-4o", detail: "Multi-step reasoning, concurrent tool execution" },
+  { layer: "AI Orchestration", tech: "LangGraph StateGraph + gpt-5.4", detail: "Multi-step reasoning, concurrent tool execution" },
   { layer: "Structured Data", tech: "Memgraph (Bolt) + Cypher", detail: "58K HS codes, 340K+ relationships" },
   { layer: "Semantic Search", tech: "Pinecone + OpenAI Embeddings", detail: "12,400+ trade docs, RAG retrieval" },
   { layer: "Live Market Data", tech: "Freightos FaaS API", detail: "Real-time FCL/LCL ocean & air quotes" },

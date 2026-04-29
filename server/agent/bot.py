@@ -88,7 +88,7 @@ _INDEX_NAME    = "HSCode_embedding"
 # IMPORTANT: must be a real model the configured backend actually serves —
 # unknown IDs (e.g. the previous "gpt-5.4") cause silent fallbacks that produce
 # garbled multilingual output (Chinese characters, Cypher fragments, etc.).
-BOT_LLM_MODEL = os.getenv("BOT_LLM_MODEL", "gpt-4o")
+BOT_LLM_MODEL = os.getenv("BOT_LLM_MODEL", "gpt-5.4")
 
 # ── web search (Anthropic) ────────────────────────────────────────────────────
 # Anthropic's server-side web_search tool is invoked from web_search_trade
@@ -345,6 +345,9 @@ def _get_embeddings() -> OpenAIEmbeddings:
         _embeddings = OpenAIEmbeddings(
             model="text-embedding-3-small",
             openai_api_key=api_key,
+        )
+        logger.info(
+            "━━━━━━━━━━━━━━ [OPENAI MODEL] text-embedding-3-small  (embeddings — bot.py _get_embeddings) ━━━━━━━━━━━━━━"
         )
         logger.info("Embeddings model initialised (text-embedding-3-small, 1536 dims)")
     return _embeddings
@@ -2112,6 +2115,10 @@ def _get_llm() -> ChatOpenAI:
             streaming=True,
         )
         logger.info(
+            "━━━━━━━━━━━━━━ [OPENAI MODEL] %s  (main LLM — bot.py _get_llm) ━━━━━━━━━━━━━━",
+            model,
+        )
+        logger.info(
             "LLM singleton initialised (%s, temp=%.2f, max_tokens=%d, top_p=%.2f, streaming=True)",
             model, temperature, max_tokens, top_p,
         )
@@ -2332,6 +2339,10 @@ def _get_router_llm() -> ChatOpenAI:
             openai_api_key=api_key,
             temperature=0.0,   # deterministic routing always
             streaming=False,
+        )
+        logger.info(
+            "━━━━━━━━━━━━━━ [OPENAI MODEL] %s  (router LLM — bot.py _get_router_llm) ━━━━━━━━━━━━━━",
+            model,
         )
         logger.info("Router LLM initialised (%s, streaming=False)", model)
     return _router_llm

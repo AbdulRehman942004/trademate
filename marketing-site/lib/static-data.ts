@@ -287,7 +287,7 @@ export const features: Feature[] = [
       "LLM-generated conversation titles",
       "Share conversations via unique public links",
     ],
-    techNote: "Powered by LangGraph StateGraph + GPT-4o with custom tool router",
+    techNote: "Powered by LangGraph StateGraph + gpt-5.4 with custom tool router",
   },
   {
     id: "f-2",
@@ -371,11 +371,11 @@ export const features: Feature[] = [
     name: "Voice Trade Assistant",
     tagline: "Speak your query. Hear your answer.",
     description:
-      "TradeMate's voice interface uses the OpenAI Realtime API (GPT-4o Realtime) to enable natural, spoken trade consultations. Up to 60-second real-time voice conversations give you hands-free access to the full platform intelligence.",
+      "TradeMate's voice interface uses the OpenAI Realtime API (gpt-5.4 Realtime) to enable natural, spoken trade consultations. Up to 60-second real-time voice conversations give you hands-free access to the full platform intelligence.",
     icon: "Mic",
     category: "AI Intelligence",
     capabilities: [
-      "OpenAI GPT-4o Realtime API integration",
+      "OpenAI gpt-5.4 Realtime API integration",
       "Up to 60-second voice conversations",
       "Full access to trade knowledge during voice session",
       "Automatic transcription and response display",

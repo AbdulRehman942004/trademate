@@ -68,6 +68,9 @@ def _get_embeddings():
             model="text-embedding-3-small",
             openai_api_key=api_key,
         )
+        logger.info(
+            "━━━━━━━━━━━━━━ [OPENAI MODEL] text-embedding-3-small  (KG embeddings — tools.py _get_embeddings) ━━━━━━━━━━━━━━"
+        )
         logger.info("OpenAI embeddings model initialised (text-embedding-3-small)")
 
     return _embeddings
@@ -297,6 +300,9 @@ def _get_pinecone_embeddings():
     if not api_key:
         raise EnvironmentError("OPENAI_API_KEY must be set in .env")
 
+    logger.info(
+        "━━━━━━━━━━━━━━ [OPENAI MODEL] text-embedding-3-small  (Pinecone embeddings — tools.py _get_pinecone_embeddings) ━━━━━━━━━━━━━━"
+    )
     return OpenAIEmbeddings(
         model="text-embedding-3-small",
         openai_api_key=api_key,

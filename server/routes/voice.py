@@ -273,6 +273,11 @@ async def voice_stream(
     api_key = os.getenv("OPENAI_API_KEY", "")
 
     try:
+        _realtime_model = _OPENAI_REALTIME_URL.split("model=", 1)[-1] if "model=" in _OPENAI_REALTIME_URL else "<unknown>"
+        logger.info(
+            "━━━━━━━━━━━━━━ [OPENAI MODEL] %s  (Realtime WS — voice.py) ━━━━━━━━━━━━━━",
+            _realtime_model,
+        )
         async with websockets.connect(
             _OPENAI_REALTIME_URL,
             additional_headers={

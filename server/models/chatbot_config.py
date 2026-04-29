@@ -7,7 +7,7 @@ class ChatbotConfig(SQLModel, table=True):
     __tablename__ = "chatbot_config"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    llm_model: str = Field(default="gpt-4o")
+    llm_model: str = Field(default="gpt-5.4")
     temperature: float = Field(default=0.7)
     max_tokens: int = Field(default=2048)
     top_p: float = Field(default=0.9)

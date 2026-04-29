@@ -119,7 +119,7 @@ External APIs: OpenAI · Anthropic · Freightos · AWS SES
 
 | Layer | Technology |
 |---|---|
-| **AI Agent** | LangGraph 1.1 (ReAct), LangChain, OpenAI `gpt-4o`, `text-embedding-3-small` |
+| **AI Agent** | LangGraph 1.1 (ReAct), LangChain, OpenAI `gpt-5.4`, `text-embedding-3-small` |
 | **Web Search** | Anthropic Claude `claude-sonnet-4-6` with `web_search_20250305` tool |
 | **Backend** | Python 3.12, FastAPI 0.135, Uvicorn, SQLModel, Pydantic v2 |
 | **Frontends** | Next.js 16 (App Router), React 19, TypeScript 5, Tailwind CSS 4 |
@@ -296,7 +296,7 @@ Open the following URLs to confirm everything is running:
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string |
 | `SECRET_KEY` | JWT signing secret (long random string) |
-| `OPENAI_API_KEY` | OpenAI API key (for gpt-4o + embeddings) |
+| `OPENAI_API_KEY` | OpenAI API key (for gpt-5.4 + embeddings) |
 | `ANTHROPIC_API_KEY` | Anthropic API key (for web search tool) |
 | `PINECONE_API_KEY` | Pinecone API key (document vector store) |
 | `FREIGHTOS_API_KEY` | Freightos FaaS API key (live freight rates) |
