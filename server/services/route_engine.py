@@ -70,9 +70,31 @@ def _load_graph(path: Path,
                 direction: RouteDirection,
                 air_gateway_by_origin: dict[str, tuple[str, str]],
                 origin_cities_in_names: list[str],
-                destination_cities_in_names: list[str]) -> _RouteGraph:
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
+                destination_cities_in_names: list[str]) -> Optional[_RouteGraph]:
+    """Load a direction's route graph from disk.
+
+    Returns None (and logs a warning) if the data file is missing or malformed,
+    so a single missing JSON cannot prevent the server from starting. The
+    affected direction will be reported as unsupported at request time, while
+    other directions continue to serve traffic normally.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        logger.warning(
+            "[ROUTE] %s graph file not found at %s — direction will be disabled. "
+            "Live Freightos rates require route topology (ports, hubs, charges) "
+            "that the API does not provide; restore the JSON to re-enable.",
+            direction, path,
+        )
+        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "[ROUTE] Failed to load %s graph from %s: %s — direction disabled.",
+            direction, path, exc,
+        )
+        return None
     return _RouteGraph(
         direction=direction,
         routes=data["routes"],
@@ -125,33 +147,33 @@ _US_AIR_GATEWAY: dict[str, tuple[str, str]] = {
 }
 
 
-_GRAPHS: dict[RouteDirection, _RouteGraph] = {
-    "PK_TO_US": _load_graph(
-        _PK_TO_US_PATH, "PK_TO_US",
-        air_gateway_by_origin=_PK_AIR_GATEWAY,
-        origin_cities_in_names=_PK_CITY_NAMES,
-        destination_cities_in_names=_US_CITY_NAMES,
-    ),
-    "US_TO_PK": _load_graph(
-        _US_TO_PK_PATH, "US_TO_PK",
-        air_gateway_by_origin=_US_AIR_GATEWAY,
-        origin_cities_in_names=_US_CITY_NAMES,
-        destination_cities_in_names=_PK_CITY_NAMES,
-    ),
-}
+_GRAPHS: dict[RouteDirection, _RouteGraph] = {}
+for _direction, _path, _gateway, _origin_names, _dest_names in (
+    ("PK_TO_US", _PK_TO_US_PATH, _PK_AIR_GATEWAY, _PK_CITY_NAMES, _US_CITY_NAMES),
+    ("US_TO_PK", _US_TO_PK_PATH, _US_AIR_GATEWAY, _US_CITY_NAMES, _PK_CITY_NAMES),
+):
+    _g = _load_graph(_path, _direction, _gateway, _origin_names, _dest_names)
+    if _g is not None:
+        _GRAPHS[_direction] = _g
+
+if not _GRAPHS:
+    logger.warning(
+        "[ROUTE] No route graphs loaded. /v1/routes/* endpoints will return 400 "
+        "until at least one direction's JSON is provided in server/data/."
+    )
 
 
 # ── Backward-compat module-level aliases ──────────────────────────────────────
 # The existing `/v1/routes/options` endpoint and a few other call sites read
-# these directly. They now reflect the PK_TO_US graph (the only direction that
-# existed before). New code should prefer the per-direction graph helpers below.
+# these directly. They reflect the PK_TO_US graph when available; otherwise
+# they remain empty so the server still imports cleanly.
 
-_PK_TO_US_GRAPH = _GRAPHS["PK_TO_US"]
-_ROUTES              = _PK_TO_US_GRAPH.routes
-_INLAND_ORIGINS      = _PK_TO_US_GRAPH.inland_origins
-_DESTINATION_CHARGES = _PK_TO_US_GRAPH.destination_charges
-_HS_DUTY_RATES       = _PK_TO_US_GRAPH.hs_duty_rates
-_FIXED               = _PK_TO_US_GRAPH.fixed
+_PK_TO_US_GRAPH = _GRAPHS.get("PK_TO_US")
+_ROUTES              = _PK_TO_US_GRAPH.routes              if _PK_TO_US_GRAPH else []
+_INLAND_ORIGINS      = _PK_TO_US_GRAPH.inland_origins      if _PK_TO_US_GRAPH else {}
+_DESTINATION_CHARGES = _PK_TO_US_GRAPH.destination_charges if _PK_TO_US_GRAPH else {}
+_HS_DUTY_RATES       = _PK_TO_US_GRAPH.hs_duty_rates       if _PK_TO_US_GRAPH else {"default": 0.0}
+_FIXED               = _PK_TO_US_GRAPH.fixed              if _PK_TO_US_GRAPH else {}
 
 
 def get_options(direction: RouteDirection = "PK_TO_US") -> dict:
