@@ -20,6 +20,7 @@ SSE event format
 import json
 import logging
 import os
+import re
 import uuid
 from typing import AsyncGenerator
 
@@ -42,6 +43,55 @@ from security.security import decode_access_token
 logger = logging.getLogger(__name__)
 
 router  = APIRouter(prefix="/v1", tags=["chat"])
+
+# ── Stream noise filters ───────────────────────────────────────────────
+# Strips non-Latin scripts that should never appear in an English trade-law
+# response. Arabic/Urdu are intentionally excluded (legitimate PK content).
+_STREAM_NOISE_RE = re.compile(
+    "["
+    "\u0400-\u04ff"   # Cyrillic (тәшкил, уйғурларниң, …)
+    "\u0500-\u052f"   # Cyrillic Supplement
+    "\u0900-\u097f"   # Devanagari
+    "\u0980-\u09ff"   # Bengali/Bangla (ালে, …)
+    "\u0a00-\u0a7f"   # Gurmukhi
+    "\u0a80-\u0aff"   # Gujarati
+    "\u0b00-\u0b7f"   # Oriya
+    "\u0b80-\u0bff"   # Tamil
+    "\u0c00-\u0c7f"   # Telugu
+    "\u0c80-\u0cff"   # Kannada
+    "\u0d00-\u0d7f"   # Malayalam
+    "\u0d80-\u0dff"   # Sinhala
+    "\u0e00-\u0e7f"   # Thai
+    "\u0e80-\u0eff"   # Lao
+    "\u0f00-\u0fff"   # Tibetan
+    "\u1000-\u109f"   # Myanmar
+    "\u1780-\u17ff"   # Khmer
+    "\u1800-\u18af"   # Mongolian
+    "\u1c00-\u1c7f"   # Lepcha
+    "\ua000-\ua48f"   # Yi Syllables
+    "\uaa00-\uaaff"   # Cham
+    "\u3040-\u309f"   # Hiragana
+    "\u30a0-\u30ff"   # Katakana
+    "\u3400-\u4dbf"   # CJK Extension A
+    "\u4e00-\u9fff"   # CJK Unified Ideographs
+    "\uac00-\ud7af"   # Hangul Syllables
+    "\uf900-\ufaff"   # CJK Compatibility Ideographs
+    "\uff00-\uffef"   # Halfwidth / Fullwidth forms
+    "]+",
+)
+
+# Detects tool-call indicator text the proxy leaks into the content stream.
+# Proxy format: "to=<tool_name> _query=… <garbage>json {\"query\":\"\u2026\"}"
+# Three sub-patterns cover the different parts of that format so the rolling
+# buffer (see _stream_agent) can catch whichever arrives first.
+_TOOL_CALL_INDICATOR_RE = re.compile(
+    r"(?:"
+    r"\bto=(?:search_pakistan_hs_data|search_us_hs_data|search_trade_documents"
+    r"|evaluate_shipping_routes|web_search_trade)\b"   # primary: to=<tool>
+    r'|json\s*\{\s*"query"\s*:'                        # secondary: json {"query":
+    r"|_query\s*="                                     # secondary: _query=
+    r")"
+)
 _bearer = HTTPBearer()
 
 # ── Token tracking ─────────────────────────────────────────────────────────────
@@ -281,11 +331,39 @@ async def _stream_agent(
         # Per-request widget store: evaluate_shipping_routes tool appends here
         widget_store: list = []
         token = route_widget_ctx.set(widget_store)
-        
+
         ctx_token = request_ctx.set({
             "user_id": user_id,
             "conversation_id": conversation_id,
         })
+
+        # Whether the user's message itself uses a noise script — if so we skip
+        # stripping so legitimate non-Latin text in the query passes through.
+        _user_has_noise_script = bool(_STREAM_NOISE_RE.search(message))
+
+        # Rolling buffer for cross-chunk tool-call-indicator detection.
+        # The proxy often streams "to=search_pakistan_hs_data" across several
+        # small token chunks, so we must assemble context before matching.
+        _pending: list[str] = []   # buffered but not yet forwarded chunks
+        _drop_mode = False         # True while swallowing tool-call text
+        _brace_depth = 0           # JSON { } nesting counter during drop mode
+        _drop_safety = 0           # safety counter — exit drop mode after N chunks
+        _OVERLAP = 80              # chars kept in buffer for overlap detection
+
+        async def _flush_pending(text: str) -> None:
+            """Apply noise stripping and forward a block of confirmed-clean text."""
+            if not text:
+                return
+            out = text
+            if not _user_has_noise_script and _STREAM_NOISE_RE.search(out):
+                out = re.sub(r"\s{2,}", " ", _STREAM_NOISE_RE.sub("", out)).strip()
+            if out:
+                reply_chunks.append(out)
+                yield _sse({
+                    "type": "token",
+                    "content": out,
+                    "conversation_id": conversation_id,
+                })
 
         async for chunk, metadata in graph.astream(initial_state, stream_mode="messages"):
             # Track tool calls for logging + persistence
@@ -301,12 +379,68 @@ async def _stream_agent(
                 and chunk.content
                 and isinstance(chunk.content, str)
             ):
-                reply_chunks.append(chunk.content)
-                yield _sse({
-                    "type": "token",
-                    "content": chunk.content,
-                    "conversation_id": conversation_id,
-                })
+                content = chunk.content
+
+                # ── Drop mode: swallow tool-call text until its JSON arg closes ─
+                if _drop_mode:
+                    _drop_safety += 1
+                    if _drop_safety > 40:
+                        # Safety valve — never stay stuck in drop mode forever
+                        _drop_mode = False
+                        _brace_depth = 0
+                        _drop_safety = 0
+                    else:
+                        for ch in content:
+                            if ch == "{":
+                                _brace_depth += 1
+                            elif ch == "}" and _brace_depth > 0:
+                                _brace_depth -= 1
+                                if _brace_depth == 0:
+                                    _drop_mode = False
+                                    _brace_depth = 0
+                                    _drop_safety = 0
+                                    break
+                        continue
+
+                # ── Buffer new content and search for indicator cross-chunk ──────
+                _pending.append(content)
+                pending_text = "".join(_pending)
+
+                match = _TOOL_CALL_INDICATOR_RE.search(pending_text)
+                if match:
+                    # Salvage any legitimate text that arrived before the indicator
+                    pre = pending_text[: match.start()]
+                    suffix = pending_text[match.start() :]
+                    _pending = []
+                    _drop_safety = 0
+                    # Initialise brace depth from what's already in the suffix.
+                    # Only exit drop mode if { was seen AND fully balanced; if no
+                    # { yet (suffix has no braces at all), stay in drop mode so
+                    # future chunks containing json {"query":...} are also dropped.
+                    _open = suffix.count("{")
+                    _close = suffix.count("}")
+                    if _open > 0 and _open <= _close:
+                        _drop_mode = False   # JSON already balanced in buffer
+                        _brace_depth = 0
+                    else:
+                        _drop_mode = True
+                        _brace_depth = max(0, _open - _close)
+                    async for ev in _flush_pending(pre.strip()):
+                        yield ev
+                    continue
+
+                # No indicator yet — flush everything except the overlap window
+                if len(pending_text) > _OVERLAP:
+                    flush = pending_text[:-_OVERLAP]
+                    _pending = [pending_text[-_OVERLAP:]]
+                    async for ev in _flush_pending(flush):
+                        yield ev
+
+        # Flush any content still in the buffer at end-of-stream
+        if _pending and not _drop_mode:
+            remaining = "".join(_pending)
+            async for ev in _flush_pending(remaining):
+                yield ev
 
         # Restore context vars
         route_widget_ctx.reset(token)
@@ -436,7 +570,6 @@ async def _stream_agent(
             # Extract HS code from recent interactions
             try:
                 from services.tariff_optimizer import TariffOptimizer
-                import re
 
                 # Try to extract HS code from message (regex search first)
                 from agent.bot import _PK_CODE_RE, _US_CODE_RE
