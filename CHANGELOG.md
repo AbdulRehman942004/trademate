@@ -1,5 +1,17 @@
 # CHANGELOG
 
+### v8.2.0 4/29/2026
+
+#### Updated
+- fix: don't crash server when a route-graph JSON is missing
+
+- route_engine loaded both direction graphs at import time, so a missing
+us_pk_routes.json raised FileNotFoundError and took down the whole FastAPI
+app. Each direction now loads independently — missing or malformed JSONs
+log a warning and are skipped, and get_options / evaluate_routes return a
+clean 400 for unconfigured directions.
+
+
 ### v8.1.0 4/29/2026
 
 #### Updated
