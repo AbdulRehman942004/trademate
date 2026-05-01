@@ -42,7 +42,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-CSV_DIR = Path(__file__).parent / "data/PK-PCT"
+# Try a sequence of likely locations; the first one that exists wins. The
+# scrapper drops fresh CSVs under tipp_scrapping/data/data/PK-PCT/, so we
+# fall through to that when no local copy exists under knowledge_graph/.
+_CSV_CANDIDATES = [
+    Path(__file__).parent / "data/PK-PCT",
+    Path(__file__).parent.parent / "tipp_scrapping/data/data/PK-PCT",
+]
+CSV_DIR = next((p for p in _CSV_CANDIDATES if p.exists()), _CSV_CANDIDATES[0])
 
 PCT_CSV        = CSV_DIR / "pct codes with hierarchy.csv"
 TARIFFS_CSV    = CSV_DIR / "tariffs.csv"
@@ -79,10 +86,30 @@ def make_uid(*parts: Any) -> str:
 
 
 def normalize_hs(code: Any) -> str | None:
-    """Zero-pad HS Code to 12 digits (tariffs.csv strips the leading zero)."""
+    """Recover an HS Code value from a CSV cell, returning a 12-digit string.
+
+    Handles three real corruption modes seen in the source CSVs:
+
+    1. Plain digit strings, possibly missing the leading zero on a 1-digit
+       chapter (`10121000000` → `010121000000`). Zero-pad to 12.
+    2. Excel scientific notation (`1.2019E+11` for codes ≥ 10 trillion).
+       The HS Code column wasn't formatted as text, so Excel coerced long
+       integers into floats. Parse the float, cast back to int, zero-pad.
+       IEEE 754 doubles keep ~15 sig digits, so 12-digit codes round-trip;
+       any digits beyond ~13 may have been silently truncated upstream and
+       are unrecoverable from this representation alone.
+    3. NaN/empty/error markers like `#NAME?` — return None.
+    """
     s = clean(code)
     if s is None:
         return None
+    # Scientific notation must be parsed as a float; stripping non-digits
+    # would glue the mantissa onto the exponent and produce garbage.
+    if "E" in s.upper():
+        try:
+            return str(int(float(s))).zfill(12)
+        except (ValueError, OverflowError):
+            pass
     digits = "".join(c for c in s if c.isdigit())
     return digits.zfill(12) if digits else None
 
@@ -101,10 +128,64 @@ def load_csv(path: Path, **kwargs) -> pd.DataFrame:
 
 
 def run_batched(session, cypher: str, rows: list[dict], desc: str) -> None:
-    """Send rows to Neo4j in chunks of NEO4J_BATCH using UNWIND."""
+    """Send rows to Neo4j/Memgraph in chunks of NEO4J_BATCH using UNWIND.
+
+    Retries each batch on:
+    - TransientError / ServiceUnavailable: optimistic-concurrency or network
+      hiccups (e.g. the chat agent reading these nodes during ingest).
+    - ClientError "unique constraint violation": when a previous transaction
+      partially committed before being rolled back by a concurrent conflict,
+      the retry sees its own earlier writes as duplicates. Our UIDs are
+      deterministic (SHA-256 of stable fields), so a duplicate is by definition
+      identical content — safe to treat as already-done.
+
+    On unique-constraint conflicts we re-issue the batch with smaller chunks
+    so a single offending row can't drag down the rest. After the retry budget
+    is exhausted, the original error propagates so the run fails loudly rather
+    than silently dropping data.
+    """
+    import time
+    from neo4j.exceptions import TransientError, ServiceUnavailable, ClientError
+
+    def _is_dup_constraint(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return "unique constraint" in msg or "already exists" in msg
+
+    def _send(batch: list[dict], depth: int = 0) -> None:
+        delay = 1.0
+        for attempt in range(6):
+            try:
+                session.run(cypher, batch=batch)
+                return
+            except (TransientError, ServiceUnavailable) as exc:
+                if attempt == 5:
+                    logger.error("  Batch (size=%d) failed after 6 attempts: %s",
+                                 len(batch), exc)
+                    raise
+                logger.warning("  Batch (size=%d) transient error (attempt %d/6): %s — retrying in %.1fs",
+                               len(batch), attempt + 1, exc, delay)
+                time.sleep(delay)
+                delay = min(delay * 2, 30)
+            except ClientError as exc:
+                if not _is_dup_constraint(exc):
+                    raise
+                # Unique-constraint violation — most rows are fine, one is a
+                # dup. Halve the batch and retry both halves so the conflict
+                # is isolated. At depth 5 (size ≈ batch/32) give up: the dup
+                # row is by definition identical content from a partial
+                # earlier commit, so swallowing it is safe.
+                if len(batch) <= 1 or depth >= 5:
+                    logger.warning("  Skipping duplicate row(s) (size=%d, depth=%d): %s",
+                                   len(batch), depth, str(exc)[:120])
+                    return
+                mid = len(batch) // 2
+                _send(batch[:mid], depth + 1)
+                _send(batch[mid:], depth + 1)
+                return
+
     total = len(rows)
     for start in tqdm(range(0, total, NEO4J_BATCH), desc=f"  {desc}", unit="batch"):
-        session.run(cypher, batch=rows[start : start + NEO4J_BATCH])
+        _send(rows[start : start + NEO4J_BATCH])
 
 
 # ---------------------------------------------------------------------------
@@ -273,21 +354,112 @@ DUTY_TYPES = {
     "ERD":      "Export Regulatory Duty",
 }
 
-_TARIFF_CYPHER = """
+# Three Cypher templates, one per hierarchy level a tariff can attach to.
+# Excel rounded long HS codes into scientific notation (1.2019E+11) and lost
+# the trailing digits; after recovery many of those land at SubHeading
+# (8-digit) or Heading (6-digit) precision rather than the 12-digit leaf.
+# The lookup query in agent/bot.py walks down from leaf to ancestor, so a
+# Tariff attached at SubHeading is inherited by every HSCode under it.
+#
+# SubHeading/Heading codes in the hierarchy may include separators (`1201.90`
+# in some sources), so we strip non-digits at compare time before equality.
+
+_TARIFF_HSCODE_CYPHER = """
 UNWIND $batch AS row
-MATCH (hs:HSCode:PK {code: row.hs_code})
+OPTIONAL MATCH (n:HSCode:PK {code: row.match_value})
+WITH row, n WHERE n IS NOT NULL
 MERGE (t:Tariff:PK {uid: row.uid})
-  ON CREATE SET t.hs_code    = row.hs_code,
-                t.duty_type  = row.duty_type,
-                t.duty_name  = row.duty_name,
-                t.rate       = row.rate,
-                t.valid_from = row.valid_from,
-                t.valid_to   = row.valid_to
-  ON MATCH  SET t.rate       = row.rate,
-                t.valid_from = row.valid_from,
-                t.valid_to   = row.valid_to
-MERGE (hs)-[:HAS_TARIFF]->(t)
+  ON CREATE SET t.hs_code        = row.hs_code,
+                t.duty_type      = row.duty_type,
+                t.duty_name      = row.duty_name,
+                t.rate           = row.rate,
+                t.valid_from     = row.valid_from,
+                t.valid_to       = row.valid_to,
+                t.attached_level = row.attached_level
+  ON MATCH  SET t.rate           = row.rate,
+                t.valid_from     = row.valid_from,
+                t.valid_to       = row.valid_to,
+                t.attached_level = row.attached_level
+MERGE (n)-[:HAS_TARIFF]->(t)
 """
+
+_TARIFF_SUBHEADING_CYPHER = """
+UNWIND $batch AS row
+OPTIONAL MATCH (n:SubHeading:PK)
+  WHERE replace(replace(replace(toString(n.code), '.', ''), '-', ''), ' ', '') = row.match_value
+WITH row, n WHERE n IS NOT NULL
+MERGE (t:Tariff:PK {uid: row.uid})
+  ON CREATE SET t.hs_code        = row.hs_code,
+                t.duty_type      = row.duty_type,
+                t.duty_name      = row.duty_name,
+                t.rate           = row.rate,
+                t.valid_from     = row.valid_from,
+                t.valid_to       = row.valid_to,
+                t.attached_level = row.attached_level
+  ON MATCH  SET t.rate           = row.rate,
+                t.valid_from     = row.valid_from,
+                t.valid_to       = row.valid_to,
+                t.attached_level = row.attached_level
+MERGE (n)-[:HAS_TARIFF]->(t)
+"""
+
+_TARIFF_HEADING_CYPHER = """
+UNWIND $batch AS row
+OPTIONAL MATCH (n:Heading:PK)
+  WHERE replace(replace(replace(toString(n.code), '.', ''), '-', ''), ' ', '') = row.match_value
+WITH row, n WHERE n IS NOT NULL
+MERGE (t:Tariff:PK {uid: row.uid})
+  ON CREATE SET t.hs_code        = row.hs_code,
+                t.duty_type      = row.duty_type,
+                t.duty_name      = row.duty_name,
+                t.rate           = row.rate,
+                t.valid_from     = row.valid_from,
+                t.valid_to       = row.valid_to,
+                t.attached_level = row.attached_level
+  ON MATCH  SET t.rate           = row.rate,
+                t.valid_from     = row.valid_from,
+                t.valid_to       = row.valid_to,
+                t.attached_level = row.attached_level
+MERGE (n)-[:HAS_TARIFF]->(t)
+"""
+
+
+def _classify_tariff_target(hier_codes: dict, recovered: str) -> tuple[str, str, str] | None:
+    """Pick the most-specific node level that exists in the hierarchy for a
+    recovered 12-digit code. Returns (attached_level, match_value, hs_code_for_node)
+    or None if no level matches.
+
+    Recovery may have rounded trailing digits off (Excel sci-notation precision
+    loss), so we check leaf → 8-digit subheading → 6-digit heading in that order
+    and attach to the most-specific node that actually exists.
+    """
+    if recovered in hier_codes["hsc"]:
+        return ("HSCode", recovered, recovered)
+    if recovered[:8] in hier_codes["sh"]:
+        return ("SubHeading", recovered[:8], recovered)
+    if recovered[:6] in hier_codes["hd"]:
+        return ("Heading", recovered[:6], recovered)
+    return None
+
+
+def _load_hierarchy_codes(driver) -> dict:
+    """Pull the HSCode/SubHeading/Heading code sets currently in the graph so
+    we can classify each tariff row against what actually exists."""
+    out = {"hsc": set(), "sh": set(), "hd": set()}
+    with driver.session() as session:
+        for label, key in (("HSCode:PK", "hsc"),
+                           ("SubHeading:PK", "sh"),
+                           ("Heading:PK", "hd")):
+            result = session.run(
+                f"MATCH (n:{label}) WHERE n.code IS NOT NULL "
+                f"RETURN replace(replace(replace(toString(n.code), '.', ''), '-', ''), ' ', '') AS c"
+            )
+            out[key] = {rec["c"] for rec in result if rec["c"]}
+    logger.info(
+        "  Hierarchy snapshot: %d HSCode, %d SubHeading, %d Heading nodes.",
+        len(out["hsc"]), len(out["sh"]), len(out["hd"]),
+    )
+    return out
 
 
 def ingest_tariffs(driver) -> None:
@@ -296,48 +468,85 @@ def ingest_tariffs(driver) -> None:
     logger.info("  Loaded %d rows from %s", len(df), TARIFFS_CSV.name)
 
     existing_uids = load_checkpoint(driver, "Tariff:PK", "uid")
+    hier_codes = _load_hierarchy_codes(driver)
+    if not hier_codes["hsc"]:
+        logger.warning(
+            "  Hierarchy is empty — run ingest_hierarchy first; tariff "
+            "attachment will be 0/0 until hierarchy nodes exist."
+        )
 
-    rows: list[dict] = []
-    skipped_ckpt = 0
+    # Bucket each duty row by the most-specific level it can attach to.
+    hsc_rows: list[dict] = []
+    sh_rows:  list[dict] = []
+    hd_rows:  list[dict] = []
+    skipped_ckpt    = 0
     skipped_no_code = 0
+    skipped_no_match = 0
 
     for _, row in df.iterrows():
-        hs_code = normalize_hs(row.get("HS Code"))
-        if not hs_code:
+        recovered = normalize_hs(row.get("HS Code"))
+        if not recovered:
             skipped_no_code += 1
             continue
+
+        target = _classify_tariff_target(hier_codes, recovered)
+        if target is None:
+            skipped_no_match += 1
+            continue
+        attached_level, match_value, hs_code_for_node = target
+        bucket = {"HSCode": hsc_rows, "SubHeading": sh_rows, "Heading": hd_rows}[attached_level]
+
         for prefix, duty_name in DUTY_TYPES.items():
             rate = clean(row.get(f"{prefix}_Rate"))
             if rate is None:
                 continue
             valid_from = clean(row.get(f"{prefix}_ValidFrom"))
-            uid = make_uid(hs_code, prefix, rate, valid_from)
+            uid = make_uid(hs_code_for_node, prefix, rate, valid_from, attached_level)
             if uid in existing_uids:
                 skipped_ckpt += 1
                 continue
-            rows.append({
-                "uid":        uid,
-                "hs_code":    hs_code,
-                "duty_type":  prefix,
-                "duty_name":  duty_name,
-                "rate":       rate,
-                "valid_from": valid_from,
-                "valid_to":   clean(row.get(f"{prefix}_ValidTo")),
+            bucket.append({
+                "uid":            uid,
+                "hs_code":        hs_code_for_node,
+                "match_value":    match_value,
+                "attached_level": attached_level,
+                "duty_type":      prefix,
+                "duty_name":      duty_name,
+                "rate":           rate,
+                "valid_from":     valid_from,
+                "valid_to":       clean(row.get(f"{prefix}_ValidTo")),
             })
 
+    total_new = len(hsc_rows) + len(sh_rows) + len(hd_rows)
     logger.info(
-        "  Checkpointer: %d already in DB (skipped), %d new Tariff records "
-        "(skipped %d rows with no HS code).",
-        skipped_ckpt, len(rows), skipped_no_code,
+        "  Tariff plan: %d→HSCode, %d→SubHeading, %d→Heading "
+        "(checkpointer skipped %d already-present, %d rows missing HS code, "
+        "%d rows had no matching node at any level).",
+        len(hsc_rows), len(sh_rows), len(hd_rows),
+        skipped_ckpt, skipped_no_code, skipped_no_match,
     )
+    if skipped_no_match:
+        logger.warning(
+            "━━━ [INGEST → PK] %d tariff rows had a recovered HS code that "
+            "doesn't appear in the hierarchy as HSCode/SubHeading/Heading. "
+            "These rows are dropped. Likely cause: scientific-notation "
+            "precision loss truncated the code beyond what we can match.",
+            skipped_no_match,
+        )
 
-    if not rows:
+    if not total_new:
         logger.info("  All tariff records already ingested — skipping step.")
         return
 
     with driver.session() as session:
-        run_batched(session, _TARIFF_CYPHER, rows, "Tariff batches")
-    logger.info("  Tariffs ingestion complete.")
+        if hsc_rows:
+            run_batched(session, _TARIFF_HSCODE_CYPHER, hsc_rows, "HSCode-level tariffs")
+        if sh_rows:
+            run_batched(session, _TARIFF_SUBHEADING_CYPHER, sh_rows, "SubHeading-level tariffs")
+        if hd_rows:
+            run_batched(session, _TARIFF_HEADING_CYPHER, hd_rows, "Heading-level tariffs")
+
+    logger.info("  Tariffs ingestion complete: %d Tariff nodes created.", total_new)
 
 
 # ---------------------------------------------------------------------------

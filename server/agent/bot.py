@@ -133,10 +133,26 @@ OPTIONAL MATCH (ch:Chapter:PK)-[:HAS_SUBCHAPTER]->(sc)
 // runs, which prevents the Cartesian-product row blowup that would otherwise
 // occur when an HS code has many tariffs × many cess rows × many exemptions, etc.
 WITH hs, ch, sc, hd, sh
-OPTIONAL MATCH (hs)-[:HAS_TARIFF]->(t:Tariff)
+// Tariffs may be attached at the leaf HSCode, the SubHeading, or the Heading
+// depending on what precision survived the source CSV's scientific-notation
+// rounding (see ingest_pk.py). Collect each level separately, then prefer the
+// most specific non-empty list.
+OPTIONAL MATCH (hs)-[:HAS_TARIFF]->(t1:Tariff)
 WITH hs, ch, sc, hd, sh,
-     [x IN collect(DISTINCT {type: t.duty_type, name: t.duty_name, rate: t.rate})
-        WHERE x.type IS NOT NULL] AS tariffs
+     [x IN collect(DISTINCT {type: t1.duty_type, name: t1.duty_name, rate: t1.rate, source: 'leaf'})
+        WHERE x.type IS NOT NULL] AS leaf_tariffs
+OPTIONAL MATCH (sh)-[:HAS_TARIFF]->(t2:Tariff)
+WITH hs, ch, sc, hd, sh, leaf_tariffs,
+     [x IN collect(DISTINCT {type: t2.duty_type, name: t2.duty_name, rate: t2.rate, source: 'subheading'})
+        WHERE x.type IS NOT NULL] AS sh_tariffs
+OPTIONAL MATCH (hd)-[:HAS_TARIFF]->(t3:Tariff)
+WITH hs, ch, sc, hd, sh, leaf_tariffs, sh_tariffs,
+     [x IN collect(DISTINCT {type: t3.duty_type, name: t3.duty_name, rate: t3.rate, source: 'heading'})
+        WHERE x.type IS NOT NULL] AS hd_tariffs
+WITH hs, ch, sc, hd, sh,
+     CASE WHEN size(leaf_tariffs) > 0 THEN leaf_tariffs
+          WHEN size(sh_tariffs)   > 0 THEN sh_tariffs
+          ELSE hd_tariffs END AS tariffs
 
 OPTIONAL MATCH (hs)-[:HAS_CESS]->(c:Cess)
 WITH hs, ch, sc, hd, sh, tariffs,
@@ -204,10 +220,24 @@ OPTIONAL MATCH (ch:Chapter:PK)-[:HAS_SUBCHAPTER]->(sc)
 // runs — prevents the Cartesian-product row blowup that loses tariff rows
 // when an HS code has many tariffs × cess × exemptions × procedures.
 WITH hs, score, ch, sc, hd, sh
-OPTIONAL MATCH (hs)-[:HAS_TARIFF]->(t:Tariff)
+// Tariff inheritance: leaf → SubHeading → Heading. See _PK_CODE_CYPHER
+// for the rationale (Excel sci-notation precision loss in tariffs.csv).
+OPTIONAL MATCH (hs)-[:HAS_TARIFF]->(t1:Tariff)
 WITH hs, score, ch, sc, hd, sh,
-     [x IN collect(DISTINCT {{type: t.duty_type, name: t.duty_name, rate: t.rate}})
-        WHERE x.type IS NOT NULL] AS tariffs
+     [x IN collect(DISTINCT {{type: t1.duty_type, name: t1.duty_name, rate: t1.rate, source: 'leaf'}})
+        WHERE x.type IS NOT NULL] AS leaf_tariffs
+OPTIONAL MATCH (sh)-[:HAS_TARIFF]->(t2:Tariff)
+WITH hs, score, ch, sc, hd, sh, leaf_tariffs,
+     [x IN collect(DISTINCT {{type: t2.duty_type, name: t2.duty_name, rate: t2.rate, source: 'subheading'}})
+        WHERE x.type IS NOT NULL] AS sh_tariffs
+OPTIONAL MATCH (hd)-[:HAS_TARIFF]->(t3:Tariff)
+WITH hs, score, ch, sc, hd, sh, leaf_tariffs, sh_tariffs,
+     [x IN collect(DISTINCT {{type: t3.duty_type, name: t3.duty_name, rate: t3.rate, source: 'heading'}})
+        WHERE x.type IS NOT NULL] AS hd_tariffs
+WITH hs, score, ch, sc, hd, sh,
+     CASE WHEN size(leaf_tariffs) > 0 THEN leaf_tariffs
+          WHEN size(sh_tariffs)   > 0 THEN sh_tariffs
+          ELSE hd_tariffs END AS tariffs
 
 OPTIONAL MATCH (hs)-[:HAS_CESS]->(c:Cess)
 WITH hs, score, ch, sc, hd, sh, tariffs,
