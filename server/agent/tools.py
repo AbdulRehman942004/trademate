@@ -124,15 +124,36 @@ WITH hs, score,
 
 // US-only: walk up the HAS_CHILD tree to find the parent (indent - 1)
 OPTIONAL MATCH (parent:HSCode:US)-[:HAS_CHILD]->(hs)
+// PK-only hierarchy walk-up — these MATCHes return null for US nodes
+// (US uses the HAS_CHILD parent above; PK uses SubHeading/Heading edges).
+OPTIONAL MATCH (sh:SubHeading:PK)-[:HAS_HSCODE]->(hs)
+OPTIONAL MATCH (hd:Heading:PK)-[:HAS_SUBHEADING]->(sh)
 
 // Each branch is collapsed to a single list before the next OPTIONAL MATCH
 // so the result rows don't explode into a Cartesian product of all four
 // PK relationships when an HS code is densely connected.
-WITH hs, score, source, code, full_label, parent
-OPTIONAL MATCH (hs)-[:HAS_TARIFF]->(t:Tariff)
+WITH hs, score, source, code, full_label, parent, sh, hd
+// Tariff inheritance for PK: leaf → SubHeading → Heading. Some PK tariffs are
+// attached at the SubHeading/Heading level when the source CSV's HS code lost
+// precision through Excel's scientific-notation rounding — see ingest_pk.py.
+// US nodes have no Tariff nodes (they use scalar general_rate etc.), so all
+// three OPTIONAL MATCHes return null for US and tariffs collapses to [].
+OPTIONAL MATCH (hs)-[:HAS_TARIFF]->(t1:Tariff)
+WITH hs, score, source, code, full_label, parent, sh, hd,
+     [x IN collect(DISTINCT {{type: t1.duty_type, name: t1.duty_name, rate: t1.rate, source: 'leaf'}})
+        WHERE x.type IS NOT NULL] AS leaf_tariffs
+OPTIONAL MATCH (sh)-[:HAS_TARIFF]->(t2:Tariff)
+WITH hs, score, source, code, full_label, parent, sh, hd, leaf_tariffs,
+     [x IN collect(DISTINCT {{type: t2.duty_type, name: t2.duty_name, rate: t2.rate, source: 'subheading'}})
+        WHERE x.type IS NOT NULL] AS sh_tariffs
+OPTIONAL MATCH (hd)-[:HAS_TARIFF]->(t3:Tariff)
+WITH hs, score, source, code, full_label, parent, sh, hd, leaf_tariffs, sh_tariffs,
+     [x IN collect(DISTINCT {{type: t3.duty_type, name: t3.duty_name, rate: t3.rate, source: 'heading'}})
+        WHERE x.type IS NOT NULL] AS hd_tariffs
 WITH hs, score, source, code, full_label, parent,
-     [x IN collect(DISTINCT {{type: t.duty_type, name: t.duty_name, rate: t.rate}})
-        WHERE x.type IS NOT NULL] AS tariffs
+     CASE WHEN size(leaf_tariffs) > 0 THEN leaf_tariffs
+          WHEN size(sh_tariffs)   > 0 THEN sh_tariffs
+          ELSE hd_tariffs END AS tariffs
 
 OPTIONAL MATCH (hs)-[:HAS_CESS]->(c:Cess)
 WITH hs, score, source, code, full_label, parent, tariffs,

@@ -1,5 +1,17 @@
 # CHANGELOG
 
+### v8.2.1 5/1/2026
+
+#### Updated
+- Applied the 3-level tariff-inheritance pattern for _PK_CODE_CYPHER so it now fch data from not only leaf hs code nodes but also from heading and sub headings. 
+
+
+### v8.2.1 5/1/2026
+
+#### Updated
+- Added some error handling techniques to avoid curroption of data during the ingestion in graph db.
+
+
 ### v8.2.0 4/29/2026
 
 #### Updated
