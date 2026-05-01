@@ -318,6 +318,7 @@ WITH hs, score
 WHERE 'US' IN labels(hs)
 WITH hs, score ORDER BY score DESC LIMIT $top_k
 OPTIONAL MATCH (parent:HSCode:US)-[:HAS_CHILD]->(hs)
+OPTIONAL MATCH (hs)-[:HAS_CHILD]->(child:HSCode:US)
 RETURN
     hs.hts_code              AS hts_code,
     hs.description           AS description,
@@ -330,7 +331,8 @@ RETURN
     score,
     parent.hts_code          AS parent_code,
     parent.description       AS parent_description,
-    [] AS children
+    collect({{code: child.hts_code, description: child.description,
+             general_rate: child.general_rate}}) AS children
 """
 
 # ── lazy singletons ────────────────────────────────────────────────────────────
@@ -522,6 +524,11 @@ def _format_pk_results(records: list[dict]) -> str:
                     f"  • {_s(t.get('name'))} ({display_type}): "
                     f"{t.get('rate', 'N/A')}"
                 )
+        else:
+            lines.append(
+                "Tariffs: (no tariff data recorded for this HS code — "
+                "standard schedule rates may apply; verify directly with FBR/PBS)"
+            )
 
         cess = [c for c in (r.get("cess") or []) if c.get("province")]
         if cess:
@@ -532,6 +539,8 @@ def _format_pk_results(records: list[dict]) -> str:
                     f"Import: {c.get('import_rate', 'N/A')}, "
                     f"Export: {c.get('export_rate', 'N/A')}"
                 )
+        else:
+            lines.append("Cess: (no provincial cess data recorded for this HS code)")
 
         exemptions = [e for e in (r.get("exemptions") or []) if e.get("description")]
         if exemptions:
@@ -546,6 +555,8 @@ def _format_pk_results(records: list[dict]) -> str:
             for p in procedures[:3]:
                 cat = f" [{p['category']}]" if p.get("category") else ""
                 lines.append(f"  • {_s(p['name'])}{cat}")
+        else:
+            lines.append("Required Trade Procedures: (none recorded for this HS code)")
 
         anti_dumping = [
             a for a in (r.get("anti_dumping") or [])
@@ -606,19 +617,33 @@ def _format_us_results(records: list[dict]) -> str:
             )
         if r.get("unit"):
             lines.append(f"Unit of Quantity          : {r['unit']}")
+
+        children = [c for c in (r.get("children") or []) if c.get("code")]
+
         if r.get("general_rate"):
             lines.append(f"General Rate of Duty      : {r['general_rate']}")
+        elif children:
+            # This is a heading node — do NOT present it as having its own rate;
+            # show the children inline so the LLM presents one grouped entry.
+            lines.append("General Rate of Duty      : N/A — this is a grouping heading; see rates below")
+        else:
+            lines.append("General Rate of Duty      : (not recorded for this code)")
+
         if r.get("special_rate"):
             lines.append(f"Special Rate of Duty      : {r['special_rate']}")
         if r.get("column_2_rate"):
             lines.append(f"Column 2 Rate of Duty     : {r['column_2_rate']}")
 
-        children = [c for c in (r.get("children") or []) if c.get("code")]
         if children:
-            lines.append(f"Sub-Headings ({len(children)} shown, first 5):")
+            # Instruct the LLM: present these as one entry, not as separate codes
+            lines.append(
+                f"NOTE TO MODEL: Do NOT create separate table rows for each sub-heading below. "
+                f"Present the following {min(5, len(children))} sub-heading rates as a SINGLE grouped entry "
+                f"under the heading {r.get('hts_code', '')}:"
+            )
             for c in children[:5]:
                 rate_str = (
-                    f" | General: {c['general_rate']}" if c.get("general_rate") else ""
+                    f" | General: {c['general_rate']}" if c.get("general_rate") else " | General: Free or N/A"
                 )
                 lines.append(f"  • {c.get('code', '')} — {_s(c.get('description'))}{rate_str}")
 
@@ -742,6 +767,7 @@ WITH hs,
 ORDER BY relevance ASC, hs.hts_code ASC
 LIMIT $top_k
 OPTIONAL MATCH (parent:HSCode:US)-[:HAS_CHILD]->(hs)
+OPTIONAL MATCH (hs)-[:HAS_CHILD]->(child:HSCode:US)
 RETURN
     hs.hts_code              AS hts_code,
     hs.description           AS description,
@@ -754,7 +780,8 @@ RETURN
     relevance                AS score,
     parent.hts_code          AS parent_code,
     parent.description       AS parent_description,
-    []                       AS children
+    collect({code: child.hts_code, description: child.description,
+             general_rate: child.general_rate}) AS children
 """
 
 # Fallback — also searches full_path_description; used only when description-only search
@@ -768,6 +795,7 @@ WITH hs, 2 AS relevance
 ORDER BY relevance ASC, hs.hts_code ASC
 LIMIT $top_k
 OPTIONAL MATCH (parent:HSCode:US)-[:HAS_CHILD]->(hs)
+OPTIONAL MATCH (hs)-[:HAS_CHILD]->(child:HSCode:US)
 RETURN
     hs.hts_code              AS hts_code,
     hs.description           AS description,
@@ -780,7 +808,8 @@ RETURN
     relevance                AS score,
     parent.hts_code          AS parent_code,
     parent.description       AS parent_description,
-    []                       AS children
+    collect({code: child.hts_code, description: child.description,
+             general_rate: child.general_rate}) AS children
 """
 
 
@@ -950,6 +979,9 @@ class _PKSearchInput(BaseModel):
             "'laptops' → 'portable automatic data processing machines computers', "
             "'rice' → 'rice husked milled paddy', "
             "'clothes' → 'garments apparel woven fabric'. "
+            "For animal skins/hides/leather (e.g. 'alligator skins', 'crocodile leather', "
+            "'snake skin'): include BOTH the raw form AND the processed form in your query, "
+            "e.g. 'reptile hides raw skins leather tanned dressed chapter 41'. "
             "You may also pass a 12-digit Pakistan HS code directly (e.g. '851712000000'). "
             "Do not include words like 'US' or 'American' here."
         )
@@ -968,6 +1000,9 @@ class _USSearchInput(BaseModel):
             "'leather goods/handbags/wallets/bags' → 'outer surface of leather' (returns HTS 4202.11 at 8% — NEVER use 'leather goods'), "
             "'shoes' → 'footwear leather uppers chapter 64', "
             "'furniture' → 'wooden furniture seats chapter 94'. "
+            "For animal skins/hides/leather (e.g. 'alligator skins', 'crocodile leather', "
+            "'snake skin'): include BOTH the raw form AND the processed form in your query, "
+            "e.g. 'reptile hides raw skins leather tanned dressed chapter 41'. "
             "You may also pass a US HTS code directly (e.g. '0101.21.00'). "
             "Do not include words like 'Pakistan' or 'PCT' here."
         )
@@ -1104,8 +1139,21 @@ def search_us_hs_data(query: str) -> str:
                     records = _us_vector_search(expanded)
 
         if records:
+            # 1. Deduplicate by hts_code
             seen_us: set[str] = set()
             records = [r for r in records if r.get("hts_code") not in seen_us and not seen_us.add(r.get("hts_code"))]  # type: ignore[func-returns-value]
+
+            # 2. Remove top-level entries that are already children of another
+            #    top-level entry. Vector search often returns both a heading node
+            #    (4103.20) and its leaf children (4103.20.10.00, 4103.20.20.00, …)
+            #    as separate results, which causes the LLM to produce duplicate
+            #    rate tables. Keeping leaves only under their heading prevents this.
+            child_codes: set[str] = set()
+            for r in records:
+                for c in (r.get("children") or []):
+                    if c.get("code"):
+                        child_codes.add(c["code"])
+            records = [r for r in records if r.get("hts_code") not in child_codes]
 
             logger.info("━━━ [MEMGRAPH → US ✔] Returned %d record(s) from Graph DB (US HTS).", len(records))
 
@@ -1994,7 +2042,22 @@ DATA TYPE = RATES  (tariff / duty / tax)
 ──────────────────────────────────────────────────────
 Use a Markdown table for rates — it is far easier to scan than bullet points.
 
-For Pakistan:
+DEDUPLICATION RULE — CRITICAL:
+  When the tool returns MULTIPLE HS code records for the same country (e.g., 3 PK records,
+  or 2 US records), you MUST check whether their duty rates are identical across records.
+
+  • If ALL returned records share the SAME rates for every duty type → produce EXACTLY ONE
+    consolidated table for that country. Do NOT repeat the table header "| Duty Type | Rate |"
+    or its rows more than once per country section. State once that the rate applies to
+    all matched HS codes.
+
+  • If records have DIFFERENT rates → produce one table per distinct HS code, labelled with
+    the code (e.g., "### `851712000000` — Smartphones"). Each table appears only ONCE.
+
+  ✗ NEVER output the same "| Duty Type | Rate |" table header and rows more than once
+    within the same country section. Duplicate tables are strictly forbidden.
+
+For Pakistan — ONE consolidated table per country section:
   | Duty Type | Rate |
   |-----------|------|
   | Customs Duty (`CD`) | x% |
@@ -2006,7 +2069,7 @@ For Pakistan:
   | Development Surcharge (`DS`) | x% |
   (only include rows where a rate exists)
 
-For US:
+For US — ONE consolidated table per country section:
   | Duty Type | Rate |
   |-----------|------|
   | General Rate of Duty (MFN) | x% |
@@ -2091,6 +2154,10 @@ ABSOLUTE PROHIBITIONS
 ✗ NEVER show only one code when multiple relevant ones were returned — list them ALL.
 ✗ NEVER show only the Customs Duty (`CD`) row when the tool returned other
   duty-type rows on the same HS code — list every row that came back.
+✗ NEVER repeat the same tariff table (same "| Duty Type | Rate |" header + rows) more
+  than once within the same country section. When multiple HS codes share identical rates,
+  show ONE combined table for the country — not one table per HS code. Duplicate table
+  headers are strictly forbidden and will confuse the user.
 ✗ NEVER add a Summary section or closing phrases like "Feel free to ask!".
 ✗ NEVER repeat information already stated.
 ✗ NEVER invent HS codes, rates, or data not present in tool results.
