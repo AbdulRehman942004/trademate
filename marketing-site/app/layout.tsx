@@ -16,13 +16,24 @@ const geistMono = Geist_Mono({
   display: "swap",
 });
 
-export const metadata: Metadata = {
-  title: {
-    default: "TradeMate — AI-Powered Trade Intelligence",
-    template: "%s | TradeMate",
-  },
+const siteConfig = {
+  name: "IntelliTrade",
+  shortName: "IntelliTrade",
   description:
-    "TradeMate is an AI-powered trade intelligence platform for instant HS code classification, tariff analysis, and shipping route optimization across Pakistan and the US.",
+    "AI-powered trade intelligence platform for instant HS code classification, tariff analysis, and shipping route optimization across Pakistan and the US.",
+  url: "https://intellotrade.com",
+  ogImage: "/images/og-image.png",
+  twitter: "@intellotrade",
+  email: "hello@intellotrade.com",
+};
+
+export const metadata: Metadata = {
+  metadataBase: new URL(siteConfig.url),
+  title: {
+    default: `${siteConfig.name} — AI-Powered Trade Intelligence`,
+    template: `%s | ${siteConfig.name}`,
+  },
+  description: siteConfig.description,
   keywords: [
     "HS code lookup",
     "tariff analysis",
@@ -34,42 +45,38 @@ export const metadata: Metadata = {
     "freight calculator",
     "customs compliance",
   ],
-  authors: [{ name: "TradeMate Team" }],
-  creator: "TradeMate",
+  authors: [{ name: siteConfig.name }],
+  creator: siteConfig.name,
   openGraph: {
     type: "website",
     locale: "en_US",
-    url: "https://trademate.ai",
-    siteName: "TradeMate",
-    title: "TradeMate — AI-Powered Trade Intelligence",
-    description:
-      "Instant HS code classification, tariff analysis, and live shipping rates powered by AI. Built for the Pakistan–US trade corridor.",
+    url: siteConfig.url,
+    siteName: siteConfig.name,
+    title: siteConfig.name,
+    description: siteConfig.description,
     images: [
       {
-        url: "/images/og-image.png",
+        url: siteConfig.ogImage,
         width: 1200,
         height: 630,
-        alt: "TradeMate — AI Trade Intelligence Platform",
+        alt: siteConfig.name,
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "TradeMate — AI-Powered Trade Intelligence",
-    description:
-      "Instant HS code classification, tariff analysis, and live shipping rates powered by AI.",
-    images: ["/images/og-image.png"],
+    site: siteConfig.twitter,
+    creator: siteConfig.twitter,
+    title: siteConfig.name,
+    description: siteConfig.description,
+    images: [siteConfig.ogImage],
   },
   robots: {
     index: true,
     follow: true,
-    googleBot: {
-      index: true,
-      follow: true,
-      "max-video-preview": -1,
-      "max-image-preview": "large",
-      "max-snippet": -1,
-    },
+  },
+  verification: {
+    google: "google-site-verification-code",
   },
 };
 
@@ -78,12 +85,27 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    name: siteConfig.name,
+    url: siteConfig.url,
+    description: siteConfig.description,
+    email: siteConfig.email,
+    sameAs: [
+      `https://twitter.com/${siteConfig.twitter.replace("@", "")}`,
+      "https://linkedin.com/company/intellotrade",
+    ],
+  };
+
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable}`}
-      suppressHydrationWarning
-    >
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`} suppressHydrationWarning>
+      <head>
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        />
+      </head>
       <body
         style={{
           minHeight: "100vh",
@@ -94,16 +116,11 @@ export default function RootLayout({
         }}
       >
         <Navbar />
-        <main
-          style={{
-            flex: 1,
-            paddingTop: "68px", /* offset for fixed navbar */
-          }}
-        >
-          {children}
-        </main>
+        <main style={{ flex: 1, paddingTop: "68px" }}>{children}</main>
         <Footer />
       </body>
     </html>
   );
 }
+
+export { siteConfig };

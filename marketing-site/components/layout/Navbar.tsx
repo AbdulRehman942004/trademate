@@ -4,8 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useEffect, useRef } from "react";
 import { navLinks } from "@/lib/static-data";
+import { site } from "@/lib/site";
 
-const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME ?? "TradeMate";
+const APP_NAME = site.name;
 const LOGIN_URL = process.env.NEXT_PUBLIC_LOGIN_URL ?? "http://localhost:3001";
 
 const camelParts = APP_NAME.match(/^([A-Z][a-z]+)([A-Z][a-zA-Z]*)$/);
