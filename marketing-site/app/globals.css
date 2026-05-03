@@ -86,23 +86,7 @@
   --z-toast:   400;
 }
 
-/* ── Dark Mode Tokens ─────────────────────────────────────────────────────── */
-.dark {
-  --bg-base:    #080c14;
-  --bg-subtle:  #0d1117;
-  --bg-muted:   #161b27;
-  --bg-surface: #111827;
 
-  --text-primary:   #f1f5f9;
-  --text-secondary: #94a3b8;
-  --text-muted:     #475569;
-  --text-inverse:   #0f172a;
-
-  --border-subtle:  rgba(255 255 255 / 0.06);
-  --border-default: rgba(255 255 255 / 0.10);
-
-  --shadow-glow: 0 0 60px -10px rgb(59 130 246 / 0.45);
-}
 
 /* ── Tailwind Theme Extension ─────────────────────────────────────────────── */
 @theme inline {

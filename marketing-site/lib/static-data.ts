@@ -406,11 +406,45 @@ export const features: Feature[] = [
 
 // ── Navigation Links ────────────────────────────────────────────────────────
 
-export const navLinks = [
-  { label: "Features", href: "/features" },
-  { label: "How It Works", href: "/how-it-works" },
-  { label: "Pricing", href: "/pricing" },
+export interface NavItem {
+  label: string;
+  href: string;
+  items?: { label: string; href: string; description?: string }[];
+}
+
+export const navLinks: NavItem[] = [
   { label: "About", href: "/about" },
+  {
+    label: "Product",
+    href: "/product",
+    items: [
+      { label: "Features", href: "/features", description: "Explore all capabilities" },
+      { label: "Pricing", href: "/pricing", description: "Plans for every scale" },
+      { label: "Voice Assistant", href: "/voice", description: "Speak your trade queries" },
+      { label: "API", href: "/docs", description: "Integrate into your systems" },
+    ],
+  },
+  {
+    label: "Solutions",
+    href: "/solutions",
+    items: [
+      { label: "For Importers", href: "/importers", description: "Streamline your imports" },
+      { label: "For Exporters", href: "/exporters", description: "Expand globally" },
+      { label: "Freight Forwarders", href: "/freight-forwarders", description: "Serve clients better" },
+      { label: "Enterprise", href: "/pricing", description: "Custom solutions" },
+    ],
+  },
+  {
+    label: "Resources",
+    href: "/resources",
+    items: [
+      { label: "Documentation", href: "/docs", description: "API guides & references" },
+      { label: "Blog", href: "/blog", description: "Trade insights & updates" },
+      { label: "Case Studies", href: "/case-studies", description: "Success stories" },
+      { label: "Help Center", href: "/help", description: "Support & FAQs" },
+    ],
+  },
+  { label: "Contact", href: "/contact" },
 ];
 
 // ── Footer Links ────────────────────────────────────────────────────────────
@@ -420,18 +454,20 @@ export const footerLinks = {
     title: "Product",
     links: [
       { label: "Features", href: "/features" },
-      { label: "How It Works", href: "/how-it-works" },
+      { label: "Solutions", href: "/solutions" },
       { label: "Pricing", href: "/pricing" },
-      { label: "Changelog", href: "/changelog" },
+      { label: "API Docs", href: "/docs" },
+      { label: "Voice Assistant", href: "/voice" },
     ],
   },
-  solutions: {
-    title: "Solutions",
+  resources: {
+    title: "Resources",
     links: [
-      { label: "For Importers", href: "/features" },
-      { label: "For Exporters", href: "/features" },
-      { label: "For Freight Forwarders", href: "/features" },
-      { label: "Enterprise", href: "/pricing" },
+      { label: "Documentation", href: "/docs" },
+      { label: "Blog", href: "/blog" },
+      { label: "Case Studies", href: "/case-studies" },
+      { label: "Use Cases", href: "/use-cases" },
+      { label: "Help Center", href: "/help" },
     ],
   },
   company: {
@@ -439,8 +475,16 @@ export const footerLinks = {
     links: [
       { label: "About Us", href: "/about" },
       { label: "Contact", href: "/contact" },
+      { label: "Careers", href: "#" },
       { label: "Privacy Policy", href: "/privacy" },
+    ],
+  },
+  legal: {
+    title: "Legal",
+    links: [
       { label: "Terms of Service", href: "/terms" },
+      { label: "Privacy Policy", href: "/privacy" },
+      { label: "Cookie Policy", href: "/cookies" },
     ],
   },
 };

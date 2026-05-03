@@ -2,20 +2,151 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { navLinks } from "@/lib/static-data";
 
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME ?? "TradeMate";
 const LOGIN_URL = process.env.NEXT_PUBLIC_LOGIN_URL ?? "http://localhost:3001";
 
-// Split CamelCase names like "TradeMate" → ["Trade", "Mate"] for two-tone logo
 const camelParts = APP_NAME.match(/^([A-Z][a-z]+)([A-Z][a-zA-Z]*)$/);
 const [namePart1, namePart2] = camelParts ? [camelParts[1], camelParts[2]] : [APP_NAME, ""];
+
+function DropdownMenu({
+  item,
+  isOpen,
+  onToggle,
+}: {
+  item: (typeof navLinks)[0];
+  isOpen: boolean;
+  onToggle: () => void;
+}) {
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        onToggle();
+      }
+    }
+    if (isOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [isOpen, onToggle]);
+
+  return (
+    <div ref={dropdownRef} style={{ position: "relative" }}>
+      <button
+        onClick={onToggle}
+        style={{
+          padding: "0.375rem 0.875rem",
+          borderRadius: "var(--radius-full)",
+          fontSize: "0.875rem",
+          fontWeight: 500,
+          color: "var(--text-secondary)",
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          gap: "0.25rem",
+          transition: "color var(--transition-fast)",
+        }}
+        onMouseEnter={(e) => {
+          (e.currentTarget as HTMLElement).style.color = "var(--text-primary)";
+        }}
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)";
+        }}
+      >
+        {item.label}
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 12 12"
+          fill="none"
+          style={{
+            transform: isOpen ? "rotate(180deg)" : "rotate(0)",
+            transition: "transform var(--transition-fast)",
+          }}
+        >
+          <path
+            d="M3 4.5L6 7.5L9 4.5"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
+      {isOpen && item.items && (
+        <div
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: "50%",
+            transform: "translateX(-50%)",
+            marginTop: "0.5rem",
+            minWidth: "220px",
+            background: "var(--bg-surface)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius-lg)",
+            boxShadow: "var(--shadow-lg)",
+            padding: "0.5rem",
+            animation: "fadeInUp 0.2s ease forwards",
+            zIndex: 1000,
+          }}
+        >
+          {item.items.map((subItem, idx) => (
+            <Link
+              key={idx}
+              href={subItem.href}
+              style={{
+                display: "block",
+                padding: "0.625rem 0.875rem",
+                borderRadius: "var(--radius-md)",
+                textDecoration: "none",
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "var(--bg-muted)";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "transparent";
+              }}
+            >
+              <div
+                style={{
+                  fontSize: "0.875rem",
+                  fontWeight: 500,
+                  color: "var(--text-primary)",
+                }}
+              >
+                {subItem.label}
+              </div>
+              {subItem.description && (
+                <div
+                  style={{
+                    fontSize: "0.75rem",
+                    color: "var(--text-muted)",
+                    marginTop: "0.125rem",
+                  }}
+                >
+                  {subItem.description}
+                </div>
+              )}
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Navbar() {
   const pathname = usePathname();
   const [scrolled, setScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null);
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 20);
@@ -23,9 +154,9 @@ export default function Navbar() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
-  // Close mobile menu on route change
   useEffect(() => {
     setMobileOpen(false);
+    setOpenDropdown(null);
   }, [pathname]);
 
   return (
@@ -37,14 +168,10 @@ export default function Navbar() {
         right: 0,
         zIndex: "var(--z-nav)",
         transition: "background var(--transition-base), box-shadow var(--transition-base), border-color var(--transition-base)",
-        background: scrolled
-          ? "rgba(8, 12, 20, 0.85)"
-          : "transparent",
+        background: scrolled ? "rgba(255, 255, 255, 0.85)" : "transparent",
         backdropFilter: scrolled ? "blur(16px)" : "none",
         WebkitBackdropFilter: scrolled ? "blur(16px)" : "none",
-        borderBottom: scrolled
-          ? "1px solid var(--border-subtle)"
-          : "1px solid transparent",
+        borderBottom: scrolled ? "1px solid var(--border-subtle)" : "1px solid transparent",
       }}
     >
       <div
@@ -56,7 +183,6 @@ export default function Navbar() {
           height: "68px",
         }}
       >
-        {/* ── Logo ──────────────────────────────────────────────────────── */}
         <Link
           href="/"
           id="nav-logo"
@@ -67,7 +193,6 @@ export default function Navbar() {
             textDecoration: "none",
           }}
         >
-          {/* Icon mark */}
           <div
             style={{
               width: "32px",
@@ -93,21 +218,33 @@ export default function Navbar() {
               color: "var(--text-primary)",
             }}
           >
-            {namePart1}<span style={{ color: "var(--color-brand-400)" }}>{namePart2}</span>
+            {namePart1}
+            <span style={{ color: "var(--color-brand-400)" }}>{namePart2}</span>
           </span>
         </Link>
 
-        {/* ── Desktop Nav ────────────────────────────────────────────────── */}
         <nav
           aria-label="Main navigation"
           style={{
             display: "flex",
             alignItems: "center",
-            gap: "0.25rem",
+            gap: "0.125rem",
           }}
           className="hidden-mobile"
         >
           {navLinks.map((link) => {
+            if (link.items) {
+              return (
+                <DropdownMenu
+                  key={link.label}
+                  item={link}
+                  isOpen={openDropdown === link.label}
+                  onToggle={() =>
+                    setOpenDropdown(openDropdown === link.label ? null : link.label)
+                  }
+                />
+              );
+            }
             const isActive = pathname === link.href || pathname.startsWith(link.href + "/");
             return (
               <Link
@@ -126,7 +263,7 @@ export default function Navbar() {
                 onMouseEnter={(e) => {
                   if (!isActive) {
                     (e.currentTarget as HTMLElement).style.color = "var(--text-primary)";
-                    (e.currentTarget as HTMLElement).style.background = "rgba(255 255 255 / 0.05)";
+                    (e.currentTarget as HTMLElement).style.background = "rgba(0 0 0 / 0.04)";
                   }
                 }}
                 onMouseLeave={(e) => {
@@ -142,7 +279,6 @@ export default function Navbar() {
           })}
         </nav>
 
-        {/* ── Desktop CTA ────────────────────────────────────────────────── */}
         <div
           style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}
           className="hidden-mobile"
@@ -204,7 +340,6 @@ export default function Navbar() {
           </Link>
         </div>
 
-        {/* ── Mobile Hamburger ────────────────────────────────────────────── */}
         <button
           id="nav-mobile-menu-btn"
           aria-label={mobileOpen ? "Close menu" : "Open menu"}
@@ -233,12 +368,11 @@ export default function Navbar() {
         </button>
       </div>
 
-      {/* ── Mobile Menu Drawer ──────────────────────────────────────────── */}
       {mobileOpen && (
         <div
           id="nav-mobile-menu"
           style={{
-            background: "rgba(8, 12, 20, 0.97)",
+            background: "rgba(255, 255, 255, 0.98)",
             backdropFilter: "blur(20px)",
             borderTop: "1px solid var(--border-subtle)",
             padding: "1.25rem 1.5rem 1.75rem",
@@ -249,6 +383,37 @@ export default function Navbar() {
           }}
         >
           {navLinks.map((link) => {
+            if (link.items) {
+              return (
+                <div key={link.label}>
+                  <div
+                    style={{
+                      padding: "0.75rem 1rem",
+                      fontSize: "1rem",
+                      fontWeight: 600,
+                      color: "var(--text-primary)",
+                    }}
+                  >
+                    {link.label}
+                  </div>
+                  {link.items.map((subItem, idx) => (
+                    <Link
+                      key={idx}
+                      href={subItem.href}
+                      style={{
+                        display: "block",
+                        padding: "0.625rem 1rem 0.625rem 1.75rem",
+                        fontSize: "0.9375rem",
+                        color: "var(--text-secondary)",
+                        borderRadius: "var(--radius-md)",
+                      }}
+                    >
+                      {subItem.label}
+                    </Link>
+                  ))}
+                </div>
+              );
+            }
             const isActive = pathname === link.href;
             return (
               <Link
@@ -302,7 +467,6 @@ export default function Navbar() {
         </div>
       )}
 
-      {/* ── Responsive Helpers (inline style tag) ─────────────────────── */}
       <style>{`
         @media (min-width: 768px) {
           .hidden-mobile { display: flex !important; }
